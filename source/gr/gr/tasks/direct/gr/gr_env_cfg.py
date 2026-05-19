@@ -23,10 +23,15 @@ SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence1" / "sequence1.pt")
 OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence1.usd")
 END_FRAME = 250
 
-## Optional sequence
+# # Optional sequence
 # SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence2" / "sequence2.pt")
 # OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence2.usd")
 # END_FRAME = 660
+
+# # Optional sequence
+# SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence3" / "sequence3.pt")
+# OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence3.usd")
+# END_FRAME = 510
 
 
 @configclass
