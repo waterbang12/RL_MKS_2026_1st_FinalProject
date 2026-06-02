@@ -324,7 +324,16 @@ class GrEnv(DirectRLEnv):
             total_reward,
             logs_dict,
         ) = compute_rewards(
-            # TODO: Pass all tensors and scalar weights required by compute_rewards().
+            self.obj_pos,
+            self.obj_pos_ref,
+            self.obj_rot,
+            self.obj_rot_ref,
+            self.fingertip_pos,
+            self.fingertip_pos_ref,
+            self.actions,
+            self.hand_dof_vel,
+            self.cfg.action_penalty_scale,
+            self.cfg.dof_penalty_scale,
         )
 
         for key, value in logs_dict.items():
@@ -540,16 +549,45 @@ def unscale(x, lower, upper):
 
 @torch.jit.script
 def compute_rewards(
-    # TODO: Define the reward function inputs with TorchScript-compatible types.
-    # EX) actions: torch.Tensor,
+    obj_pos: torch.Tensor,
+    obj_pos_ref: torch.Tensor,
+    obj_rot: torch.Tensor,
+    obj_rot_ref: torch.Tensor,
+    fingertip_pos: torch.Tensor,
+    fingertip_pos_ref: torch.Tensor,
+    actions: torch.Tensor,
+    hand_dof_vel: torch.Tensor,
+    action_penalty_scale: float,
+    dof_penalty_scale: float,
 ):
-    # TODO: Compute rewards and combine them into the final reward.
+    # Object position tracking reward
+    obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
+    obj_pos_reward = torch.exp(-10.0 * obj_pos_err)
+
+    # Object rotation tracking reward (quaternion dot-product distance)
+    rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
+    obj_rot_reward = torch.exp(-10.0 * (1.0 - rot_dot))
+
+    # Fingertip position tracking reward
+    fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
+    fingertip_reward = torch.exp(-20.0 * fingertip_err)
+
+    # Smoothness penalties
+    action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
+    dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
+
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
         "reward/total": reward,
+        "reward/obj_pos": obj_pos_reward,
+        "reward/obj_rot": obj_rot_reward,
+        "reward/fingertip": fingertip_reward,
+        "reward/action_penalty": action_penalty,
+        "reward/dof_vel_penalty": dof_vel_penalty,
     }
-    
+
     return reward, logs_dict
 
 
