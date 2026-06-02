@@ -511,7 +511,19 @@ class GrEnv(DirectRLEnv):
         self._collect_target()
         self._collect_state()
 
-        # TODO: Compute intermediate values used by observations and rewards.
+        # Object tracking deltas
+        self.delta_obj_pos = self.obj_pos - self.obj_pos_ref
+        self.delta_obj_pos_value = torch.norm(self.delta_obj_pos, p=2, dim=-1)
+        self.delta_fingertip_pos = torch.norm(
+            self.fingertip_pos - self.fingertip_pos_ref, p=2, dim=-1
+        )
+
+        # Early termination: hand or object drifts too far from reference
+        self.hand_far_apart = (
+            torch.norm(self.hand_pos - self.mano_kpts_pos_ref[:, 0], p=2, dim=-1) > 0.5
+        )
+        self.obj_far_apart = self.delta_obj_pos_value > 0.3
+        self.early_terminate = self.hand_far_apart | self.obj_far_apart
 
         
 
@@ -529,8 +541,25 @@ class GrEnv(DirectRLEnv):
     def compute_full_observations(self):
         obs = torch.cat(
             (
-                # TODO: Build the policy observation vector.
-                # Its final dimension must match cfg.observation_space.
+                self.hand_pos,                                                         # 3
+                quat_to_6d(self.hand_rot),                                             # 6
+                self.hand_linvel * self.cfg.vel_obs_scale,                             # 3
+                self.hand_angvel * self.cfg.vel_obs_scale,                             # 3
+                self.hand_dof_pos,                                                     # num_hand_dof (24)
+                self.hand_dof_vel * self.cfg.vel_obs_scale,                            # num_hand_dof (24)
+                self.obj_pos,                                                          # 3
+                quat_to_6d(self.obj_rot),                                              # 6
+                self.obj_linvel * self.cfg.vel_obs_scale,                              # 3
+                self.obj_angvel * self.cfg.vel_obs_scale,                              # 3
+                self.fingertip_pos.view(self.num_envs, -1),                            # 15 (5×3)
+                self.fingertip_contact_forces_buf[:, 0],                               # 5
+                self.obj_pos_ref,                                                      # 3
+                quat_to_6d(self.obj_rot_ref),                                          # 6
+                self.obj_linvel_ref * self.cfg.vel_obs_scale,                          # 3
+                self.obj_angvel_ref * self.cfg.vel_obs_scale,                          # 3
+                self.mano_kpts_pos_ref.view(self.num_envs, -1),                        # 63 (21×3)
+                self.fingertip_pos_ref.view(self.num_envs, -1),                        # 15 (5×3)
+                self.hand_dof_next,                                                    # num_hand_dof (24)
             ),
             dim=-1,
         )
