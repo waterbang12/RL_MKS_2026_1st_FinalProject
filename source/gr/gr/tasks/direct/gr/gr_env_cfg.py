@@ -40,7 +40,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     asymmetric_obs = False
     
     # TODO: Match this dimension to the observation vector built in gr_env.py.
-    observation_space = 
+    observation_space = 215 
 
     # env
     decimation = 4

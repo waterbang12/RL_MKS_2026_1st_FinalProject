@@ -504,6 +504,11 @@ class GrEnv(DirectRLEnv):
 
         # TODO: Compute intermediate values used by observations and rewards.
 
+        
+
+
+
+        
         if not self.play:
             # Point visualization for debugging; you may change which points are shown.
             debug_vis1 = self.mano_kpts_pos_ref[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
