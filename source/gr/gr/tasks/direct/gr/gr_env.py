@@ -23,12 +23,14 @@ import omni.usd
 class GrEnv(DirectRLEnv):
     cfg: GrEnvCfg
 
-    def __init__(self, cfg: GrEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: GrEnvCfg, render_mode: str | None = None, **kwargs): #just init
         super().__init__(cfg, render_mode, **kwargs)
 
-        self.inputs = torch.load(cfg.seq_ref_path, map_location="cpu")
+        self.inputs = torch.load(cfg.seq_ref_path, map_location="cpu") #시퀀스 (지금은 메인) 로딩, 병렬로 저장한다네요 isaacsim은
 
         self.num_hand_dof = self.hand.num_joints
+
+        #일단 안쓸듯
 
         self.num_kpts = len(self.cfg.MANO_kpts)
         self.termination = not self.cfg.play
@@ -36,8 +38,10 @@ class GrEnv(DirectRLEnv):
         self.time_out = torch.zeros((self.num_envs, ), device=self.device).bool()
         self.episode_length = self.cfg.episode_length
 
+        #일단 안쓸듯
+
         # list of joints, hand_bodies, fingertip_bodies, root, rigid bodies
-        self.actuated_dof_indices = list()
+        self.actuated_dof_indices = list() #컨피그로 숫자 받겠지? 숫자 기억안남
         self.root_body = list()
         self.hand_bodies = list()
         self.hand_body_names = list()
@@ -97,6 +101,7 @@ class GrEnv(DirectRLEnv):
         self.hand_kpts_pos = torch.zeros((self.num_envs, self.num_kpts, 3), device=self.device)
 
         # fingertip parameters
+        #init fingertips. doesn't seem to be important in grasping 
         self.fingertip_pos = torch.zeros((self.num_envs,self.num_fingertips,3), device=self.device)
         self.fingertip_normal = torch.zeros((self.num_envs,self.num_fingertips,3), device=self.device)
         self.fingertip_normal[:, 1:, 1] = -1
@@ -152,11 +157,18 @@ class GrEnv(DirectRLEnv):
         self.logs_dict = dict()
 
         # track successes
+
+        # so there is a success
+
+        #isaacsim runs parallel for fast simulation- for now it runs 2048 at once, each position defines a success (as a float))
+        #gpu라고 하네요
+
         self.successes = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.consecutive_successes = torch.zeros(1, dtype=torch.float, device=self.device)
 
         # global action
         self.is_global = True
+        self._debug_printed = False  # one-time diagnostic print flag
         
         self._setup_data()
 
@@ -224,6 +236,8 @@ class GrEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
         # collision group
+        #what is collision group then?
+        #just making that 책상과 손이 collide
         stage = omni.usd.get_context().get_stage()
         collisionGroupPaths = [
             "/World/collisionGroup0",
@@ -320,6 +334,7 @@ class GrEnv(DirectRLEnv):
 
 
     def _get_rewards(self) -> torch.Tensor:
+        # TODO: Pass all tensors and scalar weights required by compute_rewards().
         (
             total_reward,
             logs_dict,
@@ -511,6 +526,7 @@ class GrEnv(DirectRLEnv):
         self._collect_target()
         self._collect_state()
 
+        # TODO: Compute intermediate values used by observations and rewards.
         # Object tracking deltas
         self.delta_obj_pos = self.obj_pos - self.obj_pos_ref
         self.delta_obj_pos_value = torch.norm(self.delta_obj_pos, p=2, dim=-1)
@@ -524,6 +540,34 @@ class GrEnv(DirectRLEnv):
         )
         self.obj_far_apart = self.delta_obj_pos_value > 0.3
         self.early_terminate = self.hand_far_apart | self.obj_far_apart
+
+        # --- ONE-TIME DIAGNOSTIC (remove after checking) ---
+        if not self._debug_printed:
+            self._debug_printed = True
+            e = 0  # env index 0
+            obj_err   = self.delta_obj_pos_value[e].item()
+            ft_err    = self.delta_fingertip_pos[e].mean().item()
+            hand_dist = torch.norm(self.hand_pos[e] - self.mano_kpts_pos_ref[e, 0]).item()
+            obj_r  = torch.exp(torch.tensor(-10.0 * obj_err)).item()
+            rot_dot = torch.abs((self.obj_rot[e] * self.obj_rot_ref[e]).sum()).item()
+            rot_r  = torch.exp(torch.tensor(-10.0 * (1.0 - rot_dot))).item()
+            ft_r   = torch.exp(torch.tensor(-20.0 * ft_err)).item()
+            print("\n" + "="*55)
+            print("  DIAGNOSTIC — step 0, env 0")
+            print("="*55)
+            print(f"  obj_pos_err      : {obj_err:.4f} m   → obj_pos_reward  : {obj_r:.4f}")
+            print(f"  fingertip_err    : {ft_err:.4f} m   → fingertip_reward : {ft_r:.4f}")
+            print(f"  rot_dot          : {rot_dot:.4f}     → obj_rot_reward  : {rot_r:.4f}")
+            print(f"  hand_dist_wrist  : {hand_dist:.4f} m  (terminate if >0.5)")
+            print(f"  hand_far_apart   : {self.hand_far_apart[e].item()}")
+            print(f"  obj_far_apart    : {self.obj_far_apart[e].item()}")
+            print(f"  total reward~    : {max(0.0, obj_r + rot_r + ft_r):.4f}  (before penalties)")
+            print("="*55 + "\n")
+            # WHAT TO LOOK FOR:
+            #   obj_pos_reward ~ 0.0  → hand/obj coordinate mismatch, reward is useless
+            #   obj_pos_reward ~ 1.0  → positions aligned at step 0, reward is meaningful
+            #   hand_far_apart=True   → episodes terminate instantly, policy never learns
+            #   total reward < 0.1    → gradient signal is near zero, tuning won't help
 
         
 
@@ -539,6 +583,8 @@ class GrEnv(DirectRLEnv):
 
 
     def compute_full_observations(self):
+        # TODO: Build the policy observation vector.
+        # Its final dimension must match cfg.observation_space.
         obs = torch.cat(
             (
                 self.hand_pos,                                                         # 3
@@ -576,8 +622,12 @@ def unscale(x, lower, upper):
     return (2.0 * x - upper - lower) / (upper - lower)
 
 
-@torch.jit.script
+@torch.jit.script #just for tensorscript compatible
 def compute_rewards(
+    # TODO: Define the reward function inputs with TorchScript-compatible types.
+    # EX) actions: torch.Tensor,
+
+    # just anything that can help robot catch
     obj_pos: torch.Tensor,
     obj_pos_ref: torch.Tensor,
     obj_rot: torch.Tensor,
@@ -589,6 +639,7 @@ def compute_rewards(
     action_penalty_scale: float,
     dof_penalty_scale: float,
 ):
+    # TODO: Compute rewards and combine them into the final reward.
     # Object position tracking reward
     obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
     obj_pos_reward = torch.exp(-10.0 * obj_pos_err)
