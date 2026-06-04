@@ -78,11 +78,11 @@ params:
 
     # PPO
     e_clip: 0.2
-    entropy_coef: 0.005
+    entropy_coef: 0.003
     clip_value: True
 
     # Rollout, batch, and epoch settings
-    horizon_length: 8
+    horizon_length: 32
     minibatch_size: 1024
     mini_epochs: 5
 
