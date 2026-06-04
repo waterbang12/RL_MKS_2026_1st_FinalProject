@@ -19,6 +19,9 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 PROJECT_ROOT = Path(__file__).resolve().parents[6]
 
 # Main sequence
+
+#일단 이거부터
+
 SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence1" / "sequence1.pt")
 OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence1.usd")
 END_FRAME = 250
@@ -36,13 +39,22 @@ END_FRAME = 250
 
 @configclass
 class GrEnvCfg(DirectRLEnvCfg):
+    #inherit dirlencfg
     play = False
     asymmetric_obs = False
     
+
+    
+
+
+
     # TODO: Match this dimension to the observation vector built in gr_env.py.
     observation_space = 209
 
-    # env
+
+
+
+    # env 이 밑으로는 그냥 시뮬레이션 만들기용
     decimation = 4
     obs_type = "full"
 
@@ -101,27 +113,32 @@ class GrEnvCfg(DirectRLEnvCfg):
         lookat=(1.0, 1.0, 0.2),
     )
 
-    num_revolving_joints = 22
+    num_revolving_joints = 22 # 이건 뭘까?
     actuated_joint_names = [
         "robot0_FFJ3",
         "robot0_FFJ2",
         "robot0_FFJ1",
+
         "robot0_MFJ3",
         "robot0_MFJ2",
         "robot0_MFJ1",
+
         "robot0_RFJ3",
         "robot0_RFJ2",
-        "robot0_RFJ1",
+        "robot0_RFJ1", #4손
+
         "robot0_LFJ4",
         "robot0_LFJ3",
         "robot0_LFJ2",
-        "robot0_LFJ1",
+        "robot0_LFJ1", #새끼? 아무튼
+
         "robot0_THJ4",
         "robot0_THJ3",
         "robot0_THJ2",
         "robot0_THJ1",
-        "robot0_THJ0",
-    ]
+        "robot0_THJ0",#엄지
+    ] #그냥 로봇이 18개 관절 자유도로 태어난거다
+
     fingertip_body_names = [
         "robot0_thdistal",
         "robot0_ffdistal",
@@ -140,6 +157,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     
     num_dof = len(actuated_joint_names)
     action_space = 9 + num_dof # trans + rotation + joint
+
+
     state_space = 0
     
     object_cfg: RigidObjectCfg = RigidObjectCfg(
