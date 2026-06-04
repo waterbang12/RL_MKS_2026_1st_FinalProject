@@ -650,7 +650,7 @@ def compute_rewards(
 
     # Fingertip position tracking reward
     fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
-    fingertip_reward = torch.exp(-20.0 * fingertip_err)
+    fingertip_reward = torch.exp(-10.0 * fingertip_err)
 
     # Smoothness penalties
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
