@@ -78,7 +78,7 @@ params:
 
     # PPO
     e_clip: 0.2
-    entropy_coef: 0.003
+    entropy_coef: 0.001
     clip_value: True
 
     # Rollout, batch, and epoch settings
