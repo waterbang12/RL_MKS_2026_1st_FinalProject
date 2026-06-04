@@ -347,6 +347,7 @@ class GrEnv(DirectRLEnv):
             self.fingertip_pos_ref,
             self.actions,
             self.hand_dof_vel,
+            self.fingertip_contact_forces_buf[:, 0],  # (N, 5) normal contact force per fingertip
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
         )
@@ -636,6 +637,7 @@ def compute_rewards(
     fingertip_pos_ref: torch.Tensor,
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
+    fingertip_contact_forces: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
 ):
@@ -650,13 +652,17 @@ def compute_rewards(
 
     # Fingertip position tracking reward
     fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
-    fingertip_reward = torch.exp(-20.0 * fingertip_err)
+    fingertip_reward = torch.exp(-10.0 * fingertip_err)
+
+    # Contact reward: each fingertip pressing on the object adds bonus
+    # fingertip_contact_forces shape: (N, 5), positive = pressing
+    contact_reward = 0.1 * (fingertip_contact_forces > 0.05).float().sum(dim=-1)
 
     # Smoothness penalties
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + contact_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -664,6 +670,7 @@ def compute_rewards(
         "reward/obj_pos": obj_pos_reward,
         "reward/obj_rot": obj_rot_reward,
         "reward/fingertip": fingertip_reward,
+        "reward/contact": contact_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }

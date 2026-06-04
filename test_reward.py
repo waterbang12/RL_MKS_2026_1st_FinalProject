@@ -75,24 +75,28 @@ print(f"  reward/fingertip: {logs['reward/fingertip'][0].item():.4f}  (expected 
 assert reward[0].item() > 2.9, "FAIL: perfect tracking should give ~3.0"
 print("  PASS")
 
-# ── TEST 2: large error → reward should be ~0.0 ───────────────────────────────
-print("\n── TEST 2: large error (0.5m off) ──")
+# ── TEST 2: large position error → obj_pos sub-reward should be ~0 ───────────
+# NOTE: total reward can still be >0 because rotation may be perfect.
+# We test each sub-reward independently.
+print("\n── TEST 2: large position/fingertip error → sub-rewards near zero ──")
 b = make_batch()
-b["obj_pos"][:] = 0.5  # 0.5m away
+b["obj_pos"][:, 0] = 0.5   # 0.5m off in x only
 b["fingertip_pos"][:] = 0.5
 reward, logs = compute_rewards(
     b["obj_pos"], b["obj_pos_ref"],
     b["obj_rot"], b["obj_rot_ref"],
     b["fingertip_pos"], b["fingertip_pos_ref"],
     b["actions"], b["hand_dof_vel"],
-    action_penalty_scale=-0.004,
-    dof_penalty_scale=-0.001,
+    action_penalty_scale=0.0,
+    dof_penalty_scale=0.0,
 )
-print(f"  reward/total    : {reward[0].item():.4f}  (expected near 0)")
-print(f"  reward/obj_pos  : {logs['reward/obj_pos'][0].item():.4f}")
-print(f"  reward/fingertip: {logs['reward/fingertip'][0].item():.4f}")
-assert reward[0].item() < 0.5, "FAIL: large error should give near-zero reward"
-print("  PASS")
+print(f"  reward/obj_pos  : {logs['reward/obj_pos'][0].item():.4f}   (expected ~0, err=0.5m)")
+print(f"  reward/obj_rot  : {logs['reward/obj_rot'][0].item():.4f}   (expected 1.0, rotation still aligned)")
+print(f"  reward/fingertip: {logs['reward/fingertip'][0].item():.4f}  (expected ~0, err=0.5m)")
+assert logs["reward/obj_pos"][0].item() < 0.05,  "FAIL: 0.5m obj error should give near-zero obj_pos_reward"
+assert logs["reward/fingertip"][0].item() < 0.05, "FAIL: 0.5m fingertip error should give near-zero fingertip_reward"
+assert logs["reward/obj_rot"][0].item() > 0.99,  "FAIL: aligned rotation should still give 1.0"
+print("  PASS  (rotation reward stays 1.0 — correct, it was not perturbed)")
 
 # ── TEST 3: gradient direction — moving closer should increase reward ──────────
 print("\n── TEST 3: gradient direction (closer = higher reward) ──")
