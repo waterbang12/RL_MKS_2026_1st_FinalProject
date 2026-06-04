@@ -3,22 +3,14 @@ set -e
 
 export CUDA_VISIBLE_DEVICES=0
 
-# Optional: pass CKPT to resume from a checkpoint
-# Usage: CKPT=logs/rl_games/.../nn/Gr_shadow_train.pth bash run_train.sh
-CKPT_ARG=""
-if [[ -n "${CKPT:-}" ]]; then
-    CKPT_ARG="--checkpoint $CKPT"
-    echo "Resuming from checkpoint: $CKPT"
-else
-    echo "Starting fresh training run"
-fi
+
 
 tmux new-session -d -s train "
     conda run -n isaaclab python scripts/rl_games/train.py \
         --task Gr_shadow_train \
         --num_envs 1024 \
         --headless \
-        $CKPT_ARG
+       
 "
 
 echo "Training started in tmux session 'train'"
