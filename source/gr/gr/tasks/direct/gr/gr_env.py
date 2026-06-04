@@ -656,7 +656,7 @@ def compute_rewards(
 
     # Contact reward: each fingertip pressing on the object adds bonus
     # fingertip_contact_forces shape: (N, 5), positive = pressing
-    contact_reward = 0.1 * (fingertip_contact_forces > 0.05).float().sum(dim=-1)
+    contact_reward = 0.1 * (fingertip_contact_forces > 0.01).float().sum(dim=-1)
 
     # Smoothness penalties
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
