@@ -661,8 +661,12 @@ def compute_rewards(
     angvel_err = torch.norm(obj_angvel - obj_angvel_ref, p=2, dim=-1)
     angvel_reward = torch.exp(-2.0 * angvel_err)
 
-    # All 21 MANO keypoints tracking (wrist + knuckles + fingertips averaged)
-    kpts_err = torch.norm(hand_kpts_pos - mano_kpts_pos_ref, p=2, dim=-1).mean(dim=-1)
+    # Wrist tracking — separate and full weight (controls approach angle)
+    wrist_err = torch.norm(hand_kpts_pos[:, 0] - mano_kpts_pos_ref[:, 0], p=2, dim=-1)
+    wrist_reward = torch.exp(-10.0 * wrist_err)
+
+    # Remaining 20 keypoints (knuckles + fingertips) averaged
+    kpts_err = torch.norm(hand_kpts_pos[:, 1:] - mano_kpts_pos_ref[:, 1:], p=2, dim=-1).mean(dim=-1)
     kpts_reward = torch.exp(-10.0 * kpts_err)
 
     # Lift reward — only achievable by actually gripping the bottle
@@ -673,7 +677,7 @@ def compute_rewards(
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + linvel_reward + angvel_reward + kpts_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + linvel_reward + angvel_reward + wrist_reward + kpts_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -682,6 +686,7 @@ def compute_rewards(
         "reward/obj_rot": obj_rot_reward,
         "reward/obj_linvel": linvel_reward,
         "reward/obj_angvel": angvel_reward,
+        "reward/wrist": wrist_reward,
         "reward/kpts": kpts_reward,
         "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,
