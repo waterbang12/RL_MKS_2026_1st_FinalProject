@@ -351,6 +351,7 @@ class GrEnv(DirectRLEnv):
             self.hand_dof_vel,
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
+            self.cfg.table_upper_z,
         )
 
         for key, value in logs_dict.items():
@@ -642,6 +643,7 @@ def compute_rewards(
     hand_dof_vel: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
+    table_z: float,
 ):
     # TODO: Compute rewards and combine them into the final reward.
     # Object position tracking reward
@@ -660,11 +662,15 @@ def compute_rewards(
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-10.0 * wrist_err)
 
+    # Lift reward — only achievable by actually gripping the bottle
+    lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
+    lift_reward = torch.tanh(lift_height * 20.0)
+
     # Smoothness penalties
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -673,6 +679,7 @@ def compute_rewards(
         "reward/obj_rot": obj_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/wrist": wrist_reward,
+        "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }
