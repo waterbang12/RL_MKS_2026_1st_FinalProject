@@ -661,12 +661,15 @@ def compute_rewards(
     angvel_err = torch.norm(obj_angvel - obj_angvel_ref, p=2, dim=-1)
     angvel_reward = torch.exp(-2.0 * angvel_err)
 
-    # Wrist tracking — separate and full weight (controls approach angle)
+    # Wrist absolute position — controls approach location
     wrist_err = torch.norm(hand_kpts_pos[:, 0] - mano_kpts_pos_ref[:, 0], p=2, dim=-1)
     wrist_reward = torch.exp(-10.0 * wrist_err)
 
-    # Remaining 20 keypoints (knuckles + fingertips) averaged
-    kpts_err = torch.norm(hand_kpts_pos[:, 1:] - mano_kpts_pos_ref[:, 1:], p=2, dim=-1).mean(dim=-1)
+    # Remaining 20 keypoints relative to wrist — constrains hand shape AND orientation
+    # A flipped hand has mirrored relative positions → large error even if wrist is correct
+    rel_robot = hand_kpts_pos[:, 1:] - hand_kpts_pos[:, 0:1]
+    rel_ref   = mano_kpts_pos_ref[:, 1:] - mano_kpts_pos_ref[:, 0:1]
+    kpts_err  = torch.norm(rel_robot - rel_ref, p=2, dim=-1).mean(dim=-1)
     kpts_reward = torch.exp(-10.0 * kpts_err)
 
     # Lift reward — only achievable by actually gripping the bottle
