@@ -343,10 +343,12 @@ class GrEnv(DirectRLEnv):
             self.obj_pos_ref,
             self.obj_rot,
             self.obj_rot_ref,
-            self.fingertip_pos,
-            self.fingertip_pos_ref,
-            self.hand_pos,
-            self.mano_kpts_pos_ref[:, 0],  # MANO keypoint 0 = wrist position
+            self.obj_linvel,
+            self.obj_linvel_ref,
+            self.obj_angvel,
+            self.obj_angvel_ref,
+            self.hand_kpts_pos,
+            self.mano_kpts_pos_ref,
             self.actions,
             self.hand_dof_vel,
             self.cfg.action_penalty_scale,
@@ -627,40 +629,41 @@ def unscale(x, lower, upper):
 
 @torch.jit.script #just for tensorscript compatible
 def compute_rewards(
-    # TODO: Define the reward function inputs with TorchScript-compatible types.
-    # EX) actions: torch.Tensor,
-
-    # just anything that can help robot catch
     obj_pos: torch.Tensor,
     obj_pos_ref: torch.Tensor,
     obj_rot: torch.Tensor,
     obj_rot_ref: torch.Tensor,
-    fingertip_pos: torch.Tensor,
-    fingertip_pos_ref: torch.Tensor,
-    hand_pos: torch.Tensor,
-    wrist_pos_ref: torch.Tensor,
+    obj_linvel: torch.Tensor,
+    obj_linvel_ref: torch.Tensor,
+    obj_angvel: torch.Tensor,
+    obj_angvel_ref: torch.Tensor,
+    hand_kpts_pos: torch.Tensor,      # (N, 21, 3) all MANO keypoints on robot
+    mano_kpts_pos_ref: torch.Tensor,  # (N, 21, 3) all MANO keypoints from reference
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
 ):
-    # TODO: Compute rewards and combine them into the final reward.
-    # Object position tracking reward
+    # Object position tracking
     obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
     obj_pos_reward = torch.exp(-10.0 * obj_pos_err)
 
-    # Object rotation tracking reward (quaternion dot-product distance)
+    # Object rotation tracking
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-10.0 * (1.0 - rot_dot))
 
-    # Fingertip position tracking reward
-    fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
-    fingertip_reward = torch.exp(-10.0 * fingertip_err)
+    # Object linear velocity tracking
+    linvel_err = torch.norm(obj_linvel - obj_linvel_ref, p=2, dim=-1)
+    linvel_reward = torch.exp(-2.0 * linvel_err)
 
-    # Wrist position tracking reward — forces correct approach angle
-    wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
-    wrist_reward = torch.exp(-10.0 * wrist_err)
+    # Object angular velocity tracking
+    angvel_err = torch.norm(obj_angvel - obj_angvel_ref, p=2, dim=-1)
+    angvel_reward = torch.exp(-2.0 * angvel_err)
+
+    # All 21 MANO keypoints tracking (wrist + knuckles + fingertips averaged)
+    kpts_err = torch.norm(hand_kpts_pos - mano_kpts_pos_ref, p=2, dim=-1).mean(dim=-1)
+    kpts_reward = torch.exp(-10.0 * kpts_err)
 
     # Lift reward — only achievable by actually gripping the bottle
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
@@ -670,15 +673,16 @@ def compute_rewards(
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + linvel_reward + angvel_reward + kpts_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
         "reward/total": reward,
         "reward/obj_pos": obj_pos_reward,
         "reward/obj_rot": obj_rot_reward,
-        "reward/fingertip": fingertip_reward,
-        "reward/wrist": wrist_reward,
+        "reward/obj_linvel": linvel_reward,
+        "reward/obj_angvel": angvel_reward,
+        "reward/kpts": kpts_reward,
         "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
