@@ -3,10 +3,13 @@ set -e
 
 export CUDA_VISIBLE_DEVICES=0
 
-CKPT=$(find logs/rl_games -name "*.pth" | sort | tail -1)
+# Use CKPT env var if provided, otherwise find latest
+if [[ -z "$CKPT" ]]; then
+    CKPT=$(find logs/rl_games -name "*.pth" | sort | tail -1)
+fi
 
 if [[ -z "$CKPT" ]]; then
-    echo "No checkpoint found in logs/rl_games. Run run_train.sh first."
+    echo "No checkpoint found. Set CKPT=/path/to/file.pth or run run_train.sh first."
     exit 1
 fi
 

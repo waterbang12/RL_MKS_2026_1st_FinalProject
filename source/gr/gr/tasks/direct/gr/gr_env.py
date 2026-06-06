@@ -347,8 +347,6 @@ class GrEnv(DirectRLEnv):
             self.obj_angvel_ref,
             self.hand_kpts_pos,
             self.mano_kpts_pos_ref,
-            self.hand_kpts_pos[:, self.cfg.MANO_fingertips],
-            self.fingertip_obj_offset_ref,
             self.actions,
             self.hand_dof_vel,
             self.cfg.action_penalty_scale,
@@ -606,10 +604,8 @@ def compute_rewards(
     obj_linvel_ref: torch.Tensor,
     obj_angvel: torch.Tensor,
     obj_angvel_ref: torch.Tensor,
-    hand_kpts_pos: torch.Tensor,           # (N, 21, 3) all MANO keypoints on robot
-    mano_kpts_pos_ref: torch.Tensor,       # (N, 21, 3) all MANO keypoints from reference
-    hand_fingertip_pos: torch.Tensor,      # (N, 5, 3) robot fingertip positions
-    fingertip_obj_offset_ref: torch.Tensor, # (N, 5, 3) reference fingertip-to-object offsets
+    hand_kpts_pos: torch.Tensor,      # (N, 21, 3) all MANO keypoints on robot
+    mano_kpts_pos_ref: torch.Tensor,  # (N, 21, 3) all MANO keypoints from reference
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
     action_penalty_scale: float,
@@ -636,13 +632,13 @@ def compute_rewards(
     wrist_err = torch.norm(hand_kpts_pos[:, 0] - mano_kpts_pos_ref[:, 0], p=2, dim=-1)
     wrist_reward = torch.exp(-10.0 * wrist_err)
 
-    # Fingertip positions relative to object: naturally encodes the full approach trajectory.
-    # Early frames: reference offsets are large (hand far from bottle) → no premature curl incentive.
-    # Late frames: reference offsets shrink as hand wraps around bottle → reward actual grasp.
-    # Also prevents flipping: a rotated hand has mirrored offsets → large error.
-    robot_ft_obj = hand_fingertip_pos - obj_pos.unsqueeze(1)  # (N, 5, 3)
-    ft_obj_err = torch.norm(robot_ft_obj - fingertip_obj_offset_ref, p=2, dim=-1).mean(dim=-1)
-    fingertip_reward = torch.exp(-10.0 * ft_obj_err)
+    # Remaining 20 keypoints relative to wrist — constrains hand shape AND orientation
+    # A flipped hand has mirrored relative positions → large error even if wrist is correct
+    rel_robot = hand_kpts_pos[:, 1:] - hand_kpts_pos[:, 0:1]
+    rel_ref   = mano_kpts_pos_ref[:, 1:] - mano_kpts_pos_ref[:, 0:1]
+    kpts_err  = torch.norm(rel_robot - rel_ref, p=2, dim=-1).mean(dim=-1)
+    wrist_gate = torch.exp(-20.0 * wrist_err)
+    kpts_reward = wrist_gate * torch.exp(-10.0 * kpts_err)
 
     # Lift reward — only achievable by actually gripping the bottle
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
@@ -652,7 +648,7 @@ def compute_rewards(
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + linvel_reward + angvel_reward + wrist_reward + fingertip_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + linvel_reward + angvel_reward + wrist_reward + kpts_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -662,7 +658,7 @@ def compute_rewards(
         "reward/obj_linvel": linvel_reward,
         "reward/obj_angvel": angvel_reward,
         "reward/wrist": wrist_reward,
-        "reward/fingertip": fingertip_reward,
+        "reward/kpts": kpts_reward,
         "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
