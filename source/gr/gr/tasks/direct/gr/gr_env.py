@@ -129,7 +129,6 @@ class GrEnv(DirectRLEnv):
 
         # delta
         self.delta_obj_pos = torch.zeros((self.num_envs, 3), device=self.device)
-        self.delta_fingertip_pos = torch.zeros((self.num_envs, self.num_fingertips), device=self.device)
         
         # delta_value
         self.delta_obj_pos_value = torch.zeros((self.num_envs, ), device=self.device)
@@ -168,7 +167,6 @@ class GrEnv(DirectRLEnv):
 
         # global action
         self.is_global = True
-        self._debug_printed = False  # one-time diagnostic print flag
         
         self._setup_data()
 
@@ -531,13 +529,9 @@ class GrEnv(DirectRLEnv):
         self._collect_target()
         self._collect_state()
 
-        # TODO: Compute intermediate values used by observations and rewards.
         # Object tracking deltas
         self.delta_obj_pos = self.obj_pos - self.obj_pos_ref
         self.delta_obj_pos_value = torch.norm(self.delta_obj_pos, p=2, dim=-1)
-        self.delta_fingertip_pos = torch.norm(
-            self.fingertip_pos - self.fingertip_pos_ref, p=2, dim=-1
-        )
 
         # Early termination: hand or object drifts too far from reference
         self.hand_far_apart = (
@@ -545,34 +539,6 @@ class GrEnv(DirectRLEnv):
         )
         self.obj_far_apart = self.delta_obj_pos_value > 0.3
         self.early_terminate = self.hand_far_apart | self.obj_far_apart
-
-        # --- ONE-TIME DIAGNOSTIC (remove after checking) ---
-        if not self._debug_printed:
-            self._debug_printed = True
-            e = 0  # env index 0
-            obj_err   = self.delta_obj_pos_value[e].item()
-            ft_err    = self.delta_fingertip_pos[e].mean().item()
-            hand_dist = torch.norm(self.hand_pos[e] - self.mano_kpts_pos_ref[e, 0]).item()
-            obj_r  = torch.exp(torch.tensor(-10.0 * obj_err)).item()
-            rot_dot = torch.abs((self.obj_rot[e] * self.obj_rot_ref[e]).sum()).item()
-            rot_r  = torch.exp(torch.tensor(-10.0 * (1.0 - rot_dot))).item()
-            ft_r   = torch.exp(torch.tensor(-20.0 * ft_err)).item()
-            print("\n" + "="*55)
-            print("  DIAGNOSTIC — step 0, env 0")
-            print("="*55)
-            print(f"  obj_pos_err      : {obj_err:.4f} m   → obj_pos_reward  : {obj_r:.4f}")
-            print(f"  fingertip_err    : {ft_err:.4f} m   → fingertip_reward : {ft_r:.4f}")
-            print(f"  rot_dot          : {rot_dot:.4f}     → obj_rot_reward  : {rot_r:.4f}")
-            print(f"  hand_dist_wrist  : {hand_dist:.4f} m  (terminate if >0.5)")
-            print(f"  hand_far_apart   : {self.hand_far_apart[e].item()}")
-            print(f"  obj_far_apart    : {self.obj_far_apart[e].item()}")
-            print(f"  total reward~    : {max(0.0, obj_r + rot_r + ft_r):.4f}  (before penalties)")
-            print("="*55 + "\n")
-            # WHAT TO LOOK FOR:
-            #   obj_pos_reward ~ 0.0  → hand/obj coordinate mismatch, reward is useless
-            #   obj_pos_reward ~ 1.0  → positions aligned at step 0, reward is meaningful
-            #   hand_far_apart=True   → episodes terminate instantly, policy never learns
-            #   total reward < 0.1    → gradient signal is near zero, tuning won't help
 
         
 
@@ -670,7 +636,8 @@ def compute_rewards(
     rel_robot = hand_kpts_pos[:, 1:] - hand_kpts_pos[:, 0:1]
     rel_ref   = mano_kpts_pos_ref[:, 1:] - mano_kpts_pos_ref[:, 0:1]
     kpts_err  = torch.norm(rel_robot - rel_ref, p=2, dim=-1).mean(dim=-1)
-    kpts_reward = wrist_reward * torch.exp(-10.0 * kpts_err)
+    wrist_gate = torch.exp(-50.0 * wrist_err)  # tight gate: ~0 beyond 5cm, ~1 within 1cm
+    kpts_reward = wrist_gate * torch.exp(-10.0 * kpts_err)
 
     # Lift reward — only achievable by actually gripping the bottle
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
