@@ -670,7 +670,7 @@ def compute_rewards(
     rel_robot = hand_kpts_pos[:, 1:] - hand_kpts_pos[:, 0:1]
     rel_ref   = mano_kpts_pos_ref[:, 1:] - mano_kpts_pos_ref[:, 0:1]
     kpts_err  = torch.norm(rel_robot - rel_ref, p=2, dim=-1).mean(dim=-1)
-    kpts_reward = torch.exp(-10.0 * kpts_err)
+    kpts_reward = wrist_reward * torch.exp(-10.0 * kpts_err)
 
     # Lift reward — only achievable by actually gripping the bottle
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
