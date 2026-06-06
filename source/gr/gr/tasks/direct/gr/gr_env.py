@@ -636,7 +636,7 @@ def compute_rewards(
     rel_robot = hand_kpts_pos[:, 1:] - hand_kpts_pos[:, 0:1]
     rel_ref   = mano_kpts_pos_ref[:, 1:] - mano_kpts_pos_ref[:, 0:1]
     kpts_err  = torch.norm(rel_robot - rel_ref, p=2, dim=-1).mean(dim=-1)
-    wrist_gate = torch.exp(-50.0 * wrist_err)  # tight gate: ~0 beyond 5cm, ~1 within 1cm
+    wrist_gate = torch.exp(-20.0 * wrist_err)  # ~37% at 5cm, lets finger shaping signal through during approach
     kpts_reward = wrist_gate * torch.exp(-10.0 * kpts_err)
 
     # Lift reward — only achievable by actually gripping the bottle
