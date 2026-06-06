@@ -23,14 +23,12 @@ import omni.usd
 class GrEnv(DirectRLEnv):
     cfg: GrEnvCfg
 
-    def __init__(self, cfg: GrEnvCfg, render_mode: str | None = None, **kwargs): #just init
+    def __init__(self, cfg: GrEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        self.inputs = torch.load(cfg.seq_ref_path, map_location="cpu") #시퀀스 (지금은 메인) 로딩, 병렬로 저장한다네요 isaacsim은
+        self.inputs = torch.load(cfg.seq_ref_path, map_location="cpu")
 
         self.num_hand_dof = self.hand.num_joints
-
-        #일단 안쓸듯
 
         self.num_kpts = len(self.cfg.MANO_kpts)
         self.termination = not self.cfg.play
@@ -38,10 +36,8 @@ class GrEnv(DirectRLEnv):
         self.time_out = torch.zeros((self.num_envs, ), device=self.device).bool()
         self.episode_length = self.cfg.episode_length
 
-        #일단 안쓸듯
-
         # list of joints, hand_bodies, fingertip_bodies, root, rigid bodies
-        self.actuated_dof_indices = list() #컨피그로 숫자 받겠지? 숫자 기억안남
+        self.actuated_dof_indices = list()
         self.root_body = list()
         self.hand_bodies = list()
         self.hand_body_names = list()
@@ -57,12 +53,12 @@ class GrEnv(DirectRLEnv):
                     self.root_body.append(i)
         for body_name in self.cfg.fingertip_body_names:
             self.fingertip_bodies.append(self.hand_body_names.index(body_name))
-        
+
         # num of joints, hand_bodies, fingertip_bodies, rigid bodies
         self.num_actuated_dof = len(self.actuated_dof_indices)
         self.num_hand_bodies = len(self.hand_bodies)
         self.num_fingertips = len(self.fingertip_bodies)
-        
+
         # ref parameters
         self.hand_pos_ref = torch.zeros((self.num_envs, 3), device=self.device)
         self.hand_rot_ref = torch.zeros((self.num_envs, 4), device=self.device)
@@ -101,7 +97,6 @@ class GrEnv(DirectRLEnv):
         self.hand_kpts_pos = torch.zeros((self.num_envs, self.num_kpts, 3), device=self.device)
 
         # fingertip parameters
-        #init fingertips. doesn't seem to be important in grasping 
         self.fingertip_pos = torch.zeros((self.num_envs,self.num_fingertips,3), device=self.device)
         self.fingertip_normal = torch.zeros((self.num_envs,self.num_fingertips,3), device=self.device)
         self.fingertip_normal[:, 1:, 1] = -1
@@ -129,7 +124,8 @@ class GrEnv(DirectRLEnv):
 
         # delta
         self.delta_obj_pos = torch.zeros((self.num_envs, 3), device=self.device)
-        
+        self.delta_fingertip_pos = torch.zeros((self.num_envs, self.num_fingertips), device=self.device)
+
         # delta_value
         self.delta_obj_pos_value = torch.zeros((self.num_envs, ), device=self.device)
 
@@ -151,23 +147,17 @@ class GrEnv(DirectRLEnv):
         # markers
         self.goal_markers = VisualizationMarkers(self.cfg.goal_marker_cfg)
         self.debug_markers = VisualizationMarkers(self.cfg.debug_marker_cfg)
-        
+
         # separate reward logging
         self.logs_dict = dict()
-
-        # track successes
-
-        # so there is a success
-
-        #isaacsim runs parallel for fast simulation- for now it runs 2048 at once, each position defines a success (as a float))
-        #gpu라고 하네요
 
         self.successes = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.consecutive_successes = torch.zeros(1, dtype=torch.float, device=self.device)
 
         # global action
         self.is_global = True
-        
+        self._debug_printed = False
+
         self._setup_data()
 
 
@@ -188,54 +178,44 @@ class GrEnv(DirectRLEnv):
         self.obj_angvel_seq = self.inputs['obj_angvel'].to(self.device)
         self.obj_linvel_value_seq = torch.norm(self.obj_linvel_seq, p=2, dim=-1)
         self.obj_angvel_value_seq = torch.norm(self.obj_angvel_seq, p=2, dim=-1)
-        
+
         mano_kpts_pos_seq = self.inputs["mano_kpts"][:, self.cfg.MANO_kpts].to(self.device)
         self.mano_kpts_pos_seq = mano_kpts_pos_seq + to_center_pos.unsqueeze(1)
         self.fingertip_pos_seq = self.mano_kpts_pos_seq[:, self.cfg.MANO_fingertips]
-        
 
-        self.obj_kpts_pos_seq_offset =  self.mano_kpts_pos_seq - self.obj_pos_seq.unsqueeze(1)
+        self.obj_kpts_pos_seq_offset = self.mano_kpts_pos_seq - self.obj_pos_seq.unsqueeze(1)
         self.obj_fingertip_pos_seq_offset = self.obj_kpts_pos_seq_offset[:, self.cfg.MANO_fingertips]
 
-        # Use fingertip contact patches as MANO fingertip keypoints.
         seq_len = self.obj_pos_seq.shape[0]
 
         self.hand_dof_seq = torch.zeros((seq_len, self.num_hand_dof), device=self.device)
         self.hand_dof_pos_reset[:] = self.hand_dof_seq[0]
         self.hand_rot_reset[:] = self.inputs['R_init'].to(self.device)
         self.hand_pos_reset[:] = (self.inputs['t_init']).to(self.device) + to_center_pos[0]
-        # Lift the hand slightly to avoid initial floor contact.
         self.hand_pos_reset[:,2] = self.hand_pos_reset[:,2] + 0.01
-    
+
 
     def _setup_scene(self):
         # Provided code. Do not modify.
 
-        # add hand, object
         self.hand = Articulation(self.cfg.robot_cfg)
         self.object = RigidObject(self.cfg.object_cfg)
         self.table = RigidObject(self.cfg.table_cfg)
 
-        # add ground plane
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
 
-        # add articulation to scene
         self.scene.articulations["robot"] = self.hand
         self.scene.rigid_objects["object"] = self.object
         self.scene.rigid_objects["table"] = self.table
-        
+
         self.contact_sensors = [
             self.scene.sensors[f"contact_sensor_{body}"]
             for body in self.cfg.fingertip_body_names
         ]
 
-        # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-        # collision group
-        #what is collision group then?
-        #just making that 책상과 손이 collide
         stage = omni.usd.get_context().get_stage()
         collisionGroupPaths = [
             "/World/collisionGroup0",
@@ -254,7 +234,7 @@ class GrEnv(DirectRLEnv):
             )
             collisionGroupIncludesRel[i] = collectionAPI.CreateIncludesRel()
             collisionGroupFilteredRels[i] = collisionGroup.CreateFilteredGroupsRel()
-        
+
         for i in range(self.num_envs):
             collisionGroupIncludesRel[0].AddTarget(f"/World/envs/env_{i}/Robot")
             collisionGroupIncludesRel[1].AddTarget(f"/World/envs/env_{i}/Object")
@@ -274,10 +254,9 @@ class GrEnv(DirectRLEnv):
         pos_offset = self.actions[:, 0:3]
         rot_offset = self.actions[:, 3:9]
         finger_actions = self.actions[:, 9:]
-        
-        R_offset= rotation_6d_to_matrix(rot_offset)
 
-        # Convert actions into forces and torques
+        R_offset = rotation_6d_to_matrix(rot_offset)
+
         forces = pos_offset * self.cfg.action_dt * self.cfg.K_pos
         torques = matrix_to_axis_angle(R_offset) * self.cfg.action_dt * self.cfg.K_rot
         forces = (1.0 - self.cfg.global_moving_average) * self.prev_forces + self.cfg.global_moving_average * forces
@@ -288,7 +267,6 @@ class GrEnv(DirectRLEnv):
         full_forces = torch.zeros((self.num_envs, self.hand.num_bodies, 3), device=self.device)
         full_torques = torch.zeros((self.num_envs, self.hand.num_bodies, 3), device=self.device)
 
-        # Apply forces and torques only on the root(palm)
         full_forces[:, self.root_body[0], :] = forces
         full_torques[:, self.root_body[0], :] = torques
         self.hand.set_external_force_and_torque(
@@ -297,27 +275,24 @@ class GrEnv(DirectRLEnv):
             is_global=True,
         )
 
-        
-        # Scale DoF and Smooth finger actions
         self.cur_dof_actions[:, self.actuated_dof_indices] = scale(
             finger_actions,
             self.hand_dof_lower_limits[:, self.actuated_dof_indices],
             self.hand_dof_upper_limits[:, self.actuated_dof_indices],
         )
-        
+
         self.cur_dof_actions[:, self.actuated_dof_indices] = (
             self.cfg.act_moving_average * self.cur_dof_actions[:, self.actuated_dof_indices]
             + (1.0 - self.cfg.act_moving_average) * self.prev_dof_actions[:, self.actuated_dof_indices]
         )
-        
+
         self.cur_dof_actions[:, self.actuated_dof_indices] = saturate(
             self.cur_dof_actions[:, self.actuated_dof_indices],
             self.hand_dof_lower_limits[:, self.actuated_dof_indices],
             self.hand_dof_upper_limits[:, self.actuated_dof_indices],
         )
-        
+
         self.prev_dof_actions[:, self.actuated_dof_indices] = self.cur_dof_actions[:, self.actuated_dof_indices]
-        # Position control for fingers
         self.hand.set_joint_position_target(
             self.cur_dof_actions[:, self.actuated_dof_indices],
             joint_ids=self.actuated_dof_indices
@@ -332,7 +307,6 @@ class GrEnv(DirectRLEnv):
 
 
     def _get_rewards(self) -> torch.Tensor:
-        # TODO: Pass all tensors and scalar weights required by compute_rewards().
         (
             total_reward,
             logs_dict,
@@ -341,12 +315,10 @@ class GrEnv(DirectRLEnv):
             self.obj_pos_ref,
             self.obj_rot,
             self.obj_rot_ref,
-            self.obj_linvel,
-            self.obj_linvel_ref,
-            self.obj_angvel,
-            self.obj_angvel_ref,
-            self.hand_kpts_pos,
-            self.mano_kpts_pos_ref,
+            self.fingertip_pos,
+            self.fingertip_pos_ref,
+            self.hand_pos,
+            self.mano_kpts_pos_ref[:, 0],
             self.actions,
             self.hand_dof_vel,
             self.cfg.action_penalty_scale,
@@ -370,7 +342,7 @@ class GrEnv(DirectRLEnv):
         self._compute_intermediate_values()
 
         self.time_out = self.episode_length_buf >= self.max_episode_length - 1
-        
+
         early_terminate = self.early_terminate if self.termination else torch.zeros_like(self.early_terminate, device=self.device)
         return early_terminate, self.time_out
 
@@ -378,17 +350,14 @@ class GrEnv(DirectRLEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         if env_ids is None:
             env_ids = self.hand._ALL_INDICES
-        # resets articulation and rigid body attributes
         super()._reset_idx(env_ids)
-        # Reset object
         self._reset_object(env_ids)
-        # Reset hand
         self._reset_hand(env_ids)
 
         for key, value in self.logs_dict.items():
             self.extras["log"][key] = value.mean()
         self.logs_dict = dict()
-        
+
         self.successes[env_ids] = 0
         self._compute_intermediate_values()
 
@@ -400,7 +369,7 @@ class GrEnv(DirectRLEnv):
 
         if vel is not None:
             default_states[:, 7:13] = vel
-        
+
         self.object.write_root_state_to_sim(default_states, env_ids=env_ids)
 
         self.obj_pos[env_ids] = self.obj_pos_reset[env_ids]
@@ -429,7 +398,7 @@ class GrEnv(DirectRLEnv):
         self.cur_dof_actions[env_ids] = dof_target.clone()
         self.prev_forces[env_ids] = ext_force[:, self.root_body[0], :].clone()
         self.prev_torques[env_ids] = ext_torque[:, self.root_body[0], :].clone()
-        
+
         self.hand_pos[env_ids] = self.hand_pos_reset[env_ids]
         self.hand_rot[env_ids] = self.hand_rot_reset[env_ids]
 
@@ -452,8 +421,7 @@ class GrEnv(DirectRLEnv):
         t = self.episode_length_buf
         self.t = t
         t_next = torch.clamp(t + 1, max=(self.max_episode_length-1))
-        
-        # current ref
+
         self.obj_pos_ref = self.obj_pos_seq[t]
         self.obj_rot_ref = self.obj_rot_seq[t]
         self.obj_linvel_ref = self.obj_linvel_seq[t]
@@ -463,9 +431,7 @@ class GrEnv(DirectRLEnv):
 
         self.fingertip_pos_ref = self.fingertip_pos_seq[t]
         self.mano_kpts_pos_ref = self.mano_kpts_pos_seq[t]
-        self.fingertip_obj_offset_ref = self.obj_fingertip_pos_seq_offset[t]
 
-        # next ref
         self.obj_pos_next = self.obj_pos_seq[t_next]
         self.obj_rot_next = self.obj_rot_seq[t_next]
         self.obj_linvel_next = self.obj_linvel_seq[t_next]
@@ -479,14 +445,12 @@ class GrEnv(DirectRLEnv):
 
 
     def _collect_state(self):
-        # data for object
         object_state = self.object.data.root_state_w
         self.obj_pos = object_state[:,:3] - self.scene.env_origins
-        self.obj_rot = object_state[:,3:7] 
+        self.obj_rot = object_state[:,3:7]
         self.obj_linvel = object_state[:,7:10]
         self.obj_angvel = object_state[:,10:13]
 
-        # data for hand
         hand_state = self.hand.data.root_state_w
         self.hand_pos = hand_state[:, :3] - self.scene.env_origins
         self.hand_rot = hand_state[:, 3:7]
@@ -495,7 +459,6 @@ class GrEnv(DirectRLEnv):
         self.hand_dof_pos = self.hand.data.joint_pos
         self.hand_dof_vel = self.hand.data.joint_vel
 
-        # data for handbodies
         body_state = self.hand.data.body_state_w[:, self.hand_bodies]
         hand_bodies_pos = body_state[:, :, :3]
         self.hand_bodies_pos = hand_bodies_pos - self.scene.env_origins.unsqueeze(1)
@@ -503,51 +466,41 @@ class GrEnv(DirectRLEnv):
         self.hand_bodies_linvel = body_state[:, :, 7:10]
         self.hand_bodies_angvel = body_state[:, :, 10:13]
 
-        # data for fingertips
         fingertip_pos = self.hand_bodies_pos[:, self.fingertip_bodies]
         self.fingertip_rot = self.hand_bodies_rot[:, self.fingertip_bodies]
         self.fingertip_linvel = self.hand_bodies_linvel[:, self.fingertip_bodies]
         self.fingertip_angvel = self.hand_bodies_angvel[:, self.fingertip_bodies]
 
-        # normal, axis
         self.normal = quat_apply(self.fingertip_rot, self.fingertip_normal)
         offset = quat_apply(self.fingertip_rot, self.fingertip_offset)
-        # Use fingertip contact patches as MANO fingertip keypoints.
         self.hand_kpts_pos[:, self.cfg.MANO_kpts_except_fingertips] = self.hand_bodies_pos[:, self.cfg.body_to_kpts_except_fingertips]
         self.hand_kpts_pos[:, self.cfg.MANO_fingertips] = fingertip_pos + offset
 
         self.fingertip_pos = self.hand_kpts_pos[:, self.cfg.MANO_fingertips]
-        
-        # data for fingertip sensors
+
         for i in range(self.num_fingertips):
             force = self.contact_sensors[i].data.force_matrix_w
             self.fingertip_contact_forces[:, i] = force[:, 0, 0]
         self.fingertip_contact_forces_buf[:, 0] = torch.clamp_min((self.fingertip_contact_forces * (-self.normal)).sum(dim=-1), 0)
 
 
-
     def _compute_intermediate_values(self):
         self._collect_target()
         self._collect_state()
 
-        # Object tracking deltas
         self.delta_obj_pos = self.obj_pos - self.obj_pos_ref
         self.delta_obj_pos_value = torch.norm(self.delta_obj_pos, p=2, dim=-1)
+        self.delta_fingertip_pos = torch.norm(
+            self.fingertip_pos - self.fingertip_pos_ref, p=2, dim=-1
+        )
 
-        # Early termination: hand or object drifts too far from reference
         self.hand_far_apart = (
             torch.norm(self.hand_pos - self.mano_kpts_pos_ref[:, 0], p=2, dim=-1) > 0.5
         )
         self.obj_far_apart = self.delta_obj_pos_value > 0.3
         self.early_terminate = self.hand_far_apart | self.obj_far_apart
 
-        
-
-
-
-        
         if not self.play:
-            # Point visualization for debugging; you may change which points are shown.
             debug_vis1 = self.mano_kpts_pos_ref[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
             self.goal_markers.visualize(debug_vis1.view(-1,3))
             debug_vis2 = self.hand_kpts_pos[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
@@ -555,34 +508,32 @@ class GrEnv(DirectRLEnv):
 
 
     def compute_full_observations(self):
-        # TODO: Build the policy observation vector.
-        # Its final dimension must match cfg.observation_space.
         obs = torch.cat(
             (
                 self.hand_pos,                                                         # 3
                 quat_to_6d(self.hand_rot),                                             # 6
                 self.hand_linvel * self.cfg.vel_obs_scale,                             # 3
                 self.hand_angvel * self.cfg.vel_obs_scale,                             # 3
-                self.hand_dof_pos,                                                     # num_hand_dof (24)
-                self.hand_dof_vel * self.cfg.vel_obs_scale,                            # num_hand_dof (24)
+                self.hand_dof_pos,                                                     # 24
+                self.hand_dof_vel * self.cfg.vel_obs_scale,                            # 24
                 self.obj_pos,                                                          # 3
                 quat_to_6d(self.obj_rot),                                              # 6
                 self.obj_linvel * self.cfg.vel_obs_scale,                              # 3
                 self.obj_angvel * self.cfg.vel_obs_scale,                              # 3
-                self.fingertip_pos.view(self.num_envs, -1),                            # 15 (5×3)
+                self.fingertip_pos.view(self.num_envs, -1),                            # 15 (5x3)
                 self.fingertip_contact_forces_buf[:, 0],                               # 5
                 self.obj_pos_ref,                                                      # 3
                 quat_to_6d(self.obj_rot_ref),                                          # 6
                 self.obj_linvel_ref * self.cfg.vel_obs_scale,                          # 3
                 self.obj_angvel_ref * self.cfg.vel_obs_scale,                          # 3
-                self.mano_kpts_pos_ref.view(self.num_envs, -1),                        # 63 (21×3)
-                self.fingertip_pos_ref.view(self.num_envs, -1),                        # 15 (5×3)
-                self.hand_dof_next,                                                    # num_hand_dof (24)
+                self.mano_kpts_pos_ref.view(self.num_envs, -1),                        # 63 (21x3)
+                self.fingertip_pos_ref.view(self.num_envs, -1),                        # 15 (5x3)
+                self.hand_dof_next,                                                    # 24
             ),
             dim=-1,
         )
         return obs
-    
+
 
 @torch.jit.script
 def scale(x, lower, upper):
@@ -594,78 +545,55 @@ def unscale(x, lower, upper):
     return (2.0 * x - upper - lower) / (upper - lower)
 
 
-@torch.jit.script #just for tensorscript compatible
+@torch.jit.script
 def compute_rewards(
     obj_pos: torch.Tensor,
     obj_pos_ref: torch.Tensor,
     obj_rot: torch.Tensor,
     obj_rot_ref: torch.Tensor,
-    obj_linvel: torch.Tensor,
-    obj_linvel_ref: torch.Tensor,
-    obj_angvel: torch.Tensor,
-    obj_angvel_ref: torch.Tensor,
-    hand_kpts_pos: torch.Tensor,      # (N, 21, 3) all MANO keypoints on robot
-    mano_kpts_pos_ref: torch.Tensor,  # (N, 21, 3) all MANO keypoints from reference
+    fingertip_pos: torch.Tensor,
+    fingertip_pos_ref: torch.Tensor,
+    hand_pos: torch.Tensor,
+    wrist_pos_ref: torch.Tensor,
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
 ):
-    # Object position tracking
     obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
     obj_pos_reward = torch.exp(-10.0 * obj_pos_err)
 
-    # Object rotation tracking
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-10.0 * (1.0 - rot_dot))
 
-    # Object linear velocity tracking
-    linvel_err = torch.norm(obj_linvel - obj_linvel_ref, p=2, dim=-1)
-    linvel_reward = torch.exp(-2.0 * linvel_err)
+    fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
+    fingertip_reward = torch.exp(-10.0 * fingertip_err)
 
-    # Object angular velocity tracking
-    angvel_err = torch.norm(obj_angvel - obj_angvel_ref, p=2, dim=-1)
-    angvel_reward = torch.exp(-2.0 * angvel_err)
-
-    # Wrist absolute position — controls approach location
-    wrist_err = torch.norm(hand_kpts_pos[:, 0] - mano_kpts_pos_ref[:, 0], p=2, dim=-1)
+    wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-10.0 * wrist_err)
 
-    # Remaining 20 keypoints relative to wrist — constrains hand shape AND orientation
-    # A flipped hand has mirrored relative positions → large error even if wrist is correct
-    rel_robot = hand_kpts_pos[:, 1:] - hand_kpts_pos[:, 0:1]
-    rel_ref   = mano_kpts_pos_ref[:, 1:] - mano_kpts_pos_ref[:, 0:1]
-    kpts_err  = torch.norm(rel_robot - rel_ref, p=2, dim=-1).mean(dim=-1)
-    wrist_gate = torch.exp(-20.0 * wrist_err)
-    kpts_reward = wrist_gate * torch.exp(-10.0 * kpts_err)
-
-    # Lift reward — only achievable by actually gripping the bottle
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = torch.tanh(lift_height * 20.0)
 
-    # Smoothness penalties
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + linvel_reward + angvel_reward + wrist_reward + kpts_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
         "reward/total": reward,
         "reward/obj_pos": obj_pos_reward,
         "reward/obj_rot": obj_rot_reward,
-        "reward/obj_linvel": linvel_reward,
-        "reward/obj_angvel": angvel_reward,
+        "reward/fingertip": fingertip_reward,
         "reward/wrist": wrist_reward,
-        "reward/kpts": kpts_reward,
         "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }
 
     return reward, logs_dict
-
 
 
 # Utils
