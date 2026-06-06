@@ -82,8 +82,8 @@ params:
     clip_value: True
 
     # Rollout, batch, and epoch settings
-    horizon_length: 32
-    minibatch_size: 1024
+    horizon_length: 64
+    minibatch_size: 2048
     mini_epochs: 5
 
     # gradient
