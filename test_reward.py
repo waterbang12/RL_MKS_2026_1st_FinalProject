@@ -75,6 +75,10 @@ print(f"  reward/fingertip: {logs['reward/fingertip'][0].item():.4f}  (expected 
 assert reward[0].item() > 2.9, "FAIL: perfect tracking should give ~3.0"
 print("  PASS")
 
+
+
+
+
 # ── TEST 2: large position error → obj_pos sub-reward should be ~0 ───────────
 # NOTE: total reward can still be >0 because rotation may be perfect.
 # We test each sub-reward independently.
