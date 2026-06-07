@@ -574,7 +574,7 @@ def compute_rewards(
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    lift_reward = torch.tanh(lift_height * 20.0)
+    lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
