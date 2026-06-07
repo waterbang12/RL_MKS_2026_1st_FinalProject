@@ -562,16 +562,16 @@ def compute_rewards(
     table_z: float,
 ):
     obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
-    obj_pos_reward = torch.exp(-10.0 * obj_pos_err)
+    obj_pos_reward = torch.exp(-2.0 * obj_pos_err)
 
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
-    obj_rot_reward = torch.exp(-10.0 * (1.0 - rot_dot))
+    obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
     fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
-    fingertip_reward = torch.exp(-10.0 * fingertip_err)
+    fingertip_reward = torch.exp(-2.0 * fingertip_err)
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
-    wrist_reward = torch.exp(-10.0 * wrist_err)
+    wrist_reward = torch.exp(-2.0 * wrist_err)
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = torch.tanh(lift_height * 20.0)
