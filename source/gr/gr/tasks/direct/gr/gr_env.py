@@ -315,6 +315,7 @@ class GrEnv(DirectRLEnv):
             self.obj_pos_ref,
             self.obj_rot,
             self.obj_rot_ref,
+            self.fingertip_pos,
             self.hand_pos,
             self.mano_kpts_pos_ref[:, 0],
             self.actions,
@@ -549,6 +550,7 @@ def compute_rewards(
     obj_pos_ref: torch.Tensor,
     obj_rot: torch.Tensor,
     obj_rot_ref: torch.Tensor,
+    fingertip_pos: torch.Tensor,
     hand_pos: torch.Tensor,
     wrist_pos_ref: torch.Tensor,
     actions: torch.Tensor,
@@ -566,13 +568,17 @@ def compute_rewards(
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
+    # reward fingertips being close to the object (no curl requirement, just approach)
+    fingertip_dist = torch.norm(fingertip_pos - obj_pos.unsqueeze(1), p=2, dim=-1).mean(dim=-1)
+    approach_reward = torch.exp(-5.0 * fingertip_dist)
+
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = 4.0 * torch.tanh(lift_height * 20.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + wrist_reward + approach_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -580,6 +586,7 @@ def compute_rewards(
         "reward/obj_pos": obj_pos_reward,
         "reward/obj_rot": obj_rot_reward,
         "reward/wrist": wrist_reward,
+        "reward/approach": approach_reward,
         "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
