@@ -321,6 +321,7 @@ class GrEnv(DirectRLEnv):
             self.mano_kpts_pos_ref[:, 0],
             self.actions,
             self.hand_dof_vel,
+            self.fingertip_contact_forces_buf[:, 0],
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
             self.cfg.table_upper_z,
@@ -557,6 +558,7 @@ def compute_rewards(
     wrist_pos_ref: torch.Tensor,
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
+    fingertip_contact_forces: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
@@ -576,10 +578,15 @@ def compute_rewards(
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
 
+    # reward thumb opposing fingers — both must press for grasp_reward > 0
+    thumb_force = fingertip_contact_forces[:, 0]
+    finger_force = fingertip_contact_forces[:, 1:].sum(dim=-1)
+    grasp_reward = torch.tanh(thumb_force * 0.1) * torch.tanh(finger_force * 0.05)
+
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + grasp_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -589,6 +596,7 @@ def compute_rewards(
         "reward/fingertip": fingertip_reward,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
+        "reward/grasp": grasp_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }
