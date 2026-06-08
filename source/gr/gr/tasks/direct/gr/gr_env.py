@@ -316,6 +316,7 @@ class GrEnv(DirectRLEnv):
             self.obj_rot,
             self.obj_rot_ref,
             self.fingertip_pos,
+            self.fingertip_pos_ref,
             self.hand_pos,
             self.mano_kpts_pos_ref[:, 0],
             self.actions,
@@ -551,6 +552,7 @@ def compute_rewards(
     obj_rot: torch.Tensor,
     obj_rot_ref: torch.Tensor,
     fingertip_pos: torch.Tensor,
+    fingertip_pos_ref: torch.Tensor,
     hand_pos: torch.Tensor,
     wrist_pos_ref: torch.Tensor,
     actions: torch.Tensor,
@@ -565,29 +567,38 @@ def compute_rewards(
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
+    fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
+    fingertip_reward = torch.exp(-2.0 * fingertip_err)
+
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
-    # reward fingertips being close to the object (no curl requirement, just approach)
-    fingertip_dist = torch.norm(fingertip_pos - obj_pos.unsqueeze(1), p=2, dim=-1).mean(dim=-1)
-    approach_reward = torch.exp(-5.0 * fingertip_dist)
-
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    lift_reward = 4.0 * torch.tanh(lift_height * 20.0)
+    lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
+
+    # thumb should be on opposite side of object from other fingers
+    thumb_vec = fingertip_pos[:, 0] - obj_pos
+    finger_vec = fingertip_pos[:, 1:].mean(dim=1) - obj_pos
+    thumb_dir = thumb_vec / (torch.norm(thumb_vec, p=2, dim=-1, keepdim=True) + 1e-8)
+    finger_dir = finger_vec / (torch.norm(finger_vec, p=2, dim=-1, keepdim=True) + 1e-8)
+    opposition = (-(thumb_dir * finger_dir).sum(dim=-1)).clamp(min=0.0)
+    thumb_dist = torch.norm(thumb_vec, p=2, dim=-1)
+    thumb_reward = opposition * torch.exp(-5.0 * thumb_dist)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + wrist_reward + approach_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + thumb_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
         "reward/total": reward,
         "reward/obj_pos": obj_pos_reward,
         "reward/obj_rot": obj_rot_reward,
+        "reward/fingertip": fingertip_reward,
         "reward/wrist": wrist_reward,
-        "reward/approach": approach_reward,
         "reward/lift": lift_reward,
+        "reward/thumb": thumb_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }
