@@ -568,8 +568,8 @@ def compute_rewards(
     obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
     per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (N, 5)
-    # thumb 1.5 weight vs 1.0 each finger: thumb=1.5/5.5≈27%, each finger=1/5.5≈18%
-    fingertip_reward = torch.exp(-2.0 * (1.5 * per_tip_err[:, 0] + per_tip_err[:, 1:].sum(dim=-1)) / 5.5)
+    # thumb 1.1x: thumb=1.1/5.1≈22%, each finger=1/5.1≈20% — minimal nudge above equal
+    fingertip_reward = torch.exp(-2.0 * (1.1 * per_tip_err[:, 0] + per_tip_err[:, 1:].sum(dim=-1)) / 5.1)
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
