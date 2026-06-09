@@ -494,24 +494,16 @@ class GrEnv(DirectRLEnv):
             self.fingertip_pos - self.fingertip_pos_ref, p=2, dim=-1
         )
 
-        # DEBUG: kinematic mismatch check — remove after diagnosis
-        t0 = self.episode_length_buf[0].item()
-        if t0 < 250:
-            thumb_err = torch.norm(self.fingertip_pos[:, 0] - self.fingertip_pos_ref[:, 0], p=2, dim=-1).mean()
-            finger_err = torch.norm(self.fingertip_pos[:, 1:] - self.fingertip_pos_ref[:, 1:], p=2, dim=-1).mean()
-            print(f"[DEBUG] t={t0:3d}  thumb_err={thumb_err:.4f}  finger_err={finger_err:.4f}  ratio={thumb_err/finger_err:.2f}x")
-
         self.hand_far_apart = (
             torch.norm(self.hand_pos - self.mano_kpts_pos_ref[:, 0], p=2, dim=-1) > 0.5
         )
         self.obj_far_apart = self.delta_obj_pos_value > 0.3
         self.early_terminate = self.hand_far_apart | self.obj_far_apart
 
-        if not self.play:
-            debug_vis1 = self.mano_kpts_pos_ref[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
-            self.goal_markers.visualize(debug_vis1.view(-1,3))
-            debug_vis2 = self.hand_kpts_pos[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
-            self.debug_markers.visualize(debug_vis2.view(-1,3))
+        debug_vis1 = self.mano_kpts_pos_ref[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
+        self.goal_markers.visualize(debug_vis1.view(-1,3))
+        debug_vis2 = self.hand_kpts_pos[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
+        self.debug_markers.visualize(debug_vis2.view(-1,3))
 
 
     def compute_full_observations(self):
