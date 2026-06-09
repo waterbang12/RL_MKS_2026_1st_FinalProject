@@ -570,8 +570,8 @@ def compute_rewards(
     per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (N, 5)
     thumb_err = per_tip_err[:, 0]
     finger_err = per_tip_err[:, 1:].mean(dim=-1)
-    # thumb weighted 3x so it can't be ignored when 4 fingers are already close
-    fingertip_reward = torch.exp(-2.0 * (3.0 * thumb_err + finger_err) / 4.0)
+    # thumb weighted 1.2x so it can't be ignored when 4 fingers are already close
+    fingertip_reward = torch.exp(-2.0 * (1.2 * thumb_err + finger_err) / 2.2)
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
