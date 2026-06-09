@@ -229,8 +229,8 @@ class GrEnvCfg(DirectRLEnvCfg):
 
     action_dt = 1 / action_fps
     
-    action_penalty_scale = -0.0004
-    dof_penalty_scale = -0.0001
+    action_penalty_scale = -0.004
+    dof_penalty_scale = -0.001
 
     act_moving_average = 0.5
     global_moving_average = 0.2

@@ -315,7 +315,6 @@ class GrEnv(DirectRLEnv):
             self.obj_pos_ref,
             self.obj_rot,
             self.obj_rot_ref,
-            self.obj_linvel,
             self.fingertip_pos,
             self.fingertip_pos_ref,
             self.hand_pos,
@@ -495,6 +494,13 @@ class GrEnv(DirectRLEnv):
             self.fingertip_pos - self.fingertip_pos_ref, p=2, dim=-1
         )
 
+        # DEBUG: kinematic mismatch check — remove after diagnosis
+        t0 = self.episode_length_buf[0].item()
+        if t0 < 250:
+            thumb_err = torch.norm(self.fingertip_pos[:, 0] - self.fingertip_pos_ref[:, 0], p=2, dim=-1).mean()
+            finger_err = torch.norm(self.fingertip_pos[:, 1:] - self.fingertip_pos_ref[:, 1:], p=2, dim=-1).mean()
+            print(f"[DEBUG] t={t0:3d}  thumb_err={thumb_err:.4f}  finger_err={finger_err:.4f}  ratio={thumb_err/finger_err:.2f}x")
+
         self.hand_far_apart = (
             torch.norm(self.hand_pos - self.mano_kpts_pos_ref[:, 0], p=2, dim=-1) > 0.5
         )
@@ -552,7 +558,6 @@ def compute_rewards(
     obj_pos_ref: torch.Tensor,
     obj_rot: torch.Tensor,
     obj_rot_ref: torch.Tensor,
-    obj_linvel: torch.Tensor,
     fingertip_pos: torch.Tensor,
     fingertip_pos_ref: torch.Tensor,
     hand_pos: torch.Tensor,
@@ -578,13 +583,10 @@ def compute_rewards(
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
 
-    # reward any upward object movement — gradient signal before full lift
-    lift_vel_reward = torch.tanh(obj_linvel[:, 2].clamp(min=0.0) * 5.0)
-
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + lift_vel_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -594,7 +596,6 @@ def compute_rewards(
         "reward/fingertip": fingertip_reward,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
-        "reward/lift_vel": lift_vel_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }
