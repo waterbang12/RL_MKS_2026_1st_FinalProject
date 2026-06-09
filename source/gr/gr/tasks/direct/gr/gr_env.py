@@ -567,32 +567,22 @@ def compute_rewards(
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
-    fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
-    fingertip_reward = torch.exp(-2.0 * fingertip_err)
+    per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (N, 5)
+    thumb_err = per_tip_err[:, 0]
+    finger_err = per_tip_err[:, 1:].mean(dim=-1)
+    # thumb weighted 3x so it can't be ignored when 4 fingers are already close
+    fingertip_reward = torch.exp(-2.0 * (3.0 * thumb_err + finger_err) / 4.0)
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
-    # reward palm pressing against the object
-    palm_dist = torch.norm(hand_pos - obj_pos, p=2, dim=-1)
-    palm_reward = torch.exp(-5.0 * palm_dist)
-
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
-
-    # thumb should be on opposite side of object from other fingers
-    thumb_vec = fingertip_pos[:, 0] - obj_pos
-    finger_vec = fingertip_pos[:, 1:].mean(dim=1) - obj_pos
-    thumb_dir = thumb_vec / (torch.norm(thumb_vec, p=2, dim=-1, keepdim=True) + 1e-8)
-    finger_dir = finger_vec / (torch.norm(finger_vec, p=2, dim=-1, keepdim=True) + 1e-8)
-    opposition = (-(thumb_dir * finger_dir).sum(dim=-1)).clamp(min=0.0)
-    thumb_dist = torch.norm(thumb_vec, p=2, dim=-1)
-    thumb_reward = opposition * torch.exp(-5.0 * thumb_dist)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + palm_reward + lift_reward + thumb_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -601,9 +591,7 @@ def compute_rewards(
         "reward/obj_rot": obj_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/wrist": wrist_reward,
-        "reward/palm": palm_reward,
         "reward/lift": lift_reward,
-        "reward/thumb": thumb_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }
