@@ -573,6 +573,10 @@ def compute_rewards(
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
+    # reward palm pressing against the object
+    palm_dist = torch.norm(hand_pos - obj_pos, p=2, dim=-1)
+    palm_reward = torch.exp(-5.0 * palm_dist)
+
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
 
@@ -588,7 +592,7 @@ def compute_rewards(
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + thumb_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + palm_reward + lift_reward + thumb_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -597,6 +601,7 @@ def compute_rewards(
         "reward/obj_rot": obj_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/wrist": wrist_reward,
+        "reward/palm": palm_reward,
         "reward/lift": lift_reward,
         "reward/thumb": thumb_reward,
         "reward/action_penalty": action_penalty,
