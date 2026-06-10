@@ -594,7 +594,6 @@ def compute_rewards(
     min_tip_reward = per_tip_reward.min(dim=-1).values                            # (B,)
 
     fingertip_reward = dir_reward * min_tip_reward
-    thumb_tip_reward = per_tip_reward[:, 0]  # explicit pull: thumb toward its reference position
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
@@ -603,16 +602,19 @@ def compute_rewards(
     lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
 
     contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
-    contact_total = contact_mag.sum(dim=-1)                           # (B,)
-    contact_thumb   = contact_mag[:, 0]                               # (B,)
-    contact_fingers = contact_mag[:, 1:].sum(dim=-1)                  # (B,)
-    # gate: thumb AND fingers must both press — if thumb=0, reward=0
-    contact_reward = torch.tanh(contact_thumb / 2.0) * torch.tanh(contact_fingers / 4.0)
+    contact_thumb   = contact_mag[:, 0]
+    contact_fingers = contact_mag[:, 1:].sum(dim=-1)
+    contact_total   = contact_mag.sum(dim=-1)
+    contact_reward  = torch.tanh(contact_total / 5.0)
 
-    action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
+    # thumb joints at actions[:, 22:27] — 10x smaller penalty to allow large thumb movements
+    action_penalty = action_penalty_scale * (
+        torch.sum(actions[:, :22] ** 2, dim=-1) +
+        0.1 * torch.sum(actions[:, 22:] ** 2, dim=-1)
+    )
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_tip_reward + wrist_reward + lift_reward + contact_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + contact_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -624,7 +626,6 @@ def compute_rewards(
         "reward/min_tip": min_tip_reward,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
-        "reward/thumb_tip": thumb_tip_reward,
         "reward/contact": contact_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
