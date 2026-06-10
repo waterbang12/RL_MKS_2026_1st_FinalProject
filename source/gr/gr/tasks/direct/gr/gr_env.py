@@ -566,8 +566,20 @@ def compute_rewards(
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
-    fingertip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1).mean(dim=-1)
-    fingertip_reward = torch.exp(-2.0 * fingertip_err)
+    # method 1: object-relative direction — gradient goes around object, not through it
+    obj_to_ref   = fingertip_pos_ref - obj_pos.unsqueeze(1)  # (B, 5, 3)
+    obj_to_robot = fingertip_pos     - obj_pos.unsqueeze(1)  # (B, 5, 3)
+    obj_to_ref_n   = obj_to_ref   / (torch.norm(obj_to_ref,   p=2, dim=-1, keepdim=True) + 1e-8)
+    obj_to_robot_n = obj_to_robot / (torch.norm(obj_to_robot, p=2, dim=-1, keepdim=True) + 1e-8)
+    cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1)   # (B, 5), +1=correct side
+    dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))  # all 5 must be on correct side
+
+    # method 2: min over per-tip euclidean — bottlenecked by worst finger, no minority exploit
+    per_tip_err    = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
+    per_tip_reward = torch.exp(-2.0 * per_tip_err)                               # (B, 5)
+    min_tip_reward = per_tip_reward.min(dim=-1).values                            # (B,)
+
+    fingertip_reward = dir_reward * min_tip_reward
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
@@ -586,6 +598,8 @@ def compute_rewards(
         "reward/obj_pos": obj_pos_reward,
         "reward/obj_rot": obj_rot_reward,
         "reward/fingertip": fingertip_reward,
+        "reward/dir": dir_reward,
+        "reward/min_tip": min_tip_reward,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,

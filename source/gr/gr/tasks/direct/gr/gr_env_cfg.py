@@ -231,6 +231,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     
     action_penalty_scale = -0.004
     dof_penalty_scale = -0.001
+    capsule_radius: float = 0.04
 
     act_moving_average = 0.5
     global_moving_average = 0.2
