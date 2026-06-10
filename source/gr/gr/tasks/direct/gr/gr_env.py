@@ -368,13 +368,16 @@ class GrEnv(DirectRLEnv):
             lift      = self.logs_dict.get("reward/lift",           torch.zeros(1, device=self.device)).mean().item()
             print(f"[Episode] contact: thumb={c_thumb:.3f}  fingers={c_fingers:.3f}  total={c_total:.3f} | obj_vel_z={vel_z:.4f} | lift={lift:.4f}")
             # thumb position diagnostic — printed once per episode reset
-            thumb_robot = self.fingertip_pos[0, 0].cpu()       # env0 thumb tip (robot)
-            thumb_ref   = self.fingertip_pos_ref[0, 0].cpu()   # env0 thumb tip (reference)
-            obj_p       = self.obj_pos[0].cpu()                 # env0 object center
+            thumb_robot = self.fingertip_pos[0, 0].cpu()
+            thumb_ref   = self.fingertip_pos_ref[0, 0].cpu()
+            obj_p       = self.obj_pos[0].cpu()
+            obj_ref_p   = self.obj_pos_ref[0].cpu()
+            ref_to_obj     = (thumb_ref   - obj_p).norm().item()
+            ref_to_obj_ref = (thumb_ref   - obj_ref_p).norm().item()
             print(f"[Thumb]   robot=({thumb_robot[0]:.3f},{thumb_robot[1]:.3f},{thumb_robot[2]:.3f})"
                   f"  ref=({thumb_ref[0]:.3f},{thumb_ref[1]:.3f},{thumb_ref[2]:.3f})"
-                  f"  obj=({obj_p[0]:.3f},{obj_p[1]:.3f},{obj_p[2]:.3f})"
-                  f"  dist_to_ref={((thumb_robot-thumb_ref).norm()).item():.3f}m")
+                  f"  dist_to_ref={((thumb_robot-thumb_ref).norm()).item():.3f}m"
+                  f"  ref→obj={ref_to_obj:.3f}m  ref→obj_ref={ref_to_obj_ref:.3f}m")
 
         self.logs_dict = dict()
 
@@ -596,12 +599,19 @@ def compute_rewards(
     cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1)   # (B, 5), +1=correct side
     dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))  # all 5 must be on correct side
 
-    # method 2: min over per-tip euclidean — bottlenecked by worst finger, no minority exploit
-    per_tip_err    = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
-    per_tip_reward = torch.exp(-2.0 * per_tip_err)                               # (B, 5)
-    min_tip_reward = per_tip_reward.min(dim=-1).values                            # (B,)
+    per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
+    thumb_err    = per_tip_err[:, 0]                                             # (B,)
+    other_err    = per_tip_err[:, 1:]                                            # (B, 4)
 
-    fingertip_reward = dir_reward * min_tip_reward
+    # other 4 fingers: 2-term product (stable, was working)
+    other_tip_reward = torch.exp(-2.0 * other_err).min(dim=-1).values           # (B,)
+    fingertip_reward = dir_reward * other_tip_reward
+
+    # thumb: separate additive term — two-scale so near-contact pressure doesn't destabilize product
+    thumb_reward_component = (
+        0.3 * torch.exp(-2.0  * thumb_err) +
+        0.7 * torch.exp(-20.0 * thumb_err)
+    )
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
@@ -617,7 +627,7 @@ def compute_rewards(
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_reward_component + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -626,7 +636,9 @@ def compute_rewards(
         "reward/obj_rot": obj_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/dir": dir_reward,
-        "reward/min_tip": min_tip_reward,
+        "reward/other_tip_min": other_tip_reward,
+        "reward/thumb_tip": thumb_reward_component,
+        "debug/thumb_err": thumb_err,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
         "reward/action_penalty": action_penalty,
