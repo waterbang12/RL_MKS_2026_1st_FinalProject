@@ -367,6 +367,14 @@ class GrEnv(DirectRLEnv):
             vel_z     = self.logs_dict.get("debug/obj_linvel_z",    torch.zeros(1, device=self.device)).mean().item()
             lift      = self.logs_dict.get("reward/lift",           torch.zeros(1, device=self.device)).mean().item()
             print(f"[Episode] contact: thumb={c_thumb:.3f}  fingers={c_fingers:.3f}  total={c_total:.3f} | obj_vel_z={vel_z:.4f} | lift={lift:.4f}")
+            # thumb position diagnostic — printed once per episode reset
+            thumb_robot = self.fingertip_pos[0, 0].cpu()       # env0 thumb tip (robot)
+            thumb_ref   = self.fingertip_pos_ref[0, 0].cpu()   # env0 thumb tip (reference)
+            obj_p       = self.obj_pos[0].cpu()                 # env0 object center
+            print(f"[Thumb]   robot=({thumb_robot[0]:.3f},{thumb_robot[1]:.3f},{thumb_robot[2]:.3f})"
+                  f"  ref=({thumb_ref[0]:.3f},{thumb_ref[1]:.3f},{thumb_ref[2]:.3f})"
+                  f"  obj=({obj_p[0]:.3f},{obj_p[1]:.3f},{obj_p[2]:.3f})"
+                  f"  dist_to_ref={((thumb_robot-thumb_ref).norm()).item():.3f}m")
 
         self.logs_dict = dict()
 
