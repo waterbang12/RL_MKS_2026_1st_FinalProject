@@ -93,7 +93,7 @@ params:
     # Miscellaneous
     critic_coef: 4
     seq_length: 4
-    bounds_loss_coef: 0.001
+    bounds_loss_coef: 0.0
     score_to_win: 20000
     max_epochs: 15000
     save_best_after: 50
