@@ -603,7 +603,10 @@ def compute_rewards(
 
     contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
     contact_total = contact_mag.sum(dim=-1)                           # (B,)
-    contact_reward = torch.tanh(contact_total / 5.0)                  # max=1, half-max ~5N
+    contact_thumb   = contact_mag[:, 0]                               # (B,)
+    contact_fingers = contact_mag[:, 1:].sum(dim=-1)                  # (B,)
+    # gate: thumb AND fingers must both press — if thumb=0, reward=0
+    contact_reward = torch.tanh(contact_thumb / 2.0) * torch.tanh(contact_fingers / 4.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
@@ -623,8 +626,8 @@ def compute_rewards(
         "reward/contact": contact_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
-        "debug/contact_thumb":   contact_mag[:, 0],
-        "debug/contact_fingers": contact_mag[:, 1:].sum(dim=-1),
+        "debug/contact_thumb":   contact_thumb,
+        "debug/contact_fingers": contact_fingers,
         "debug/contact_total":   contact_total,
         "debug/obj_linvel_z":    obj_linvel[:, 2],
     }
