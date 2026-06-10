@@ -107,11 +107,23 @@ class GrEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot"
     )
     
-    # camera
-    viewer: ViewerCfg = ViewerCfg(
-        eye=(3.0, 3.0, 2.0),
-        lookat=(1.0, 1.0, 0.2),
+    # camera — swap comments to change viewpoint
+    # viewer: ViewerCfg = ViewerCfg(  # original diagonal
+    #     eye=(3.0, 3.0, 2.0),
+    #     lookat=(1.0, 1.0, 0.2),
+    # )
+    # viewer: ViewerCfg = ViewerCfg(  # top-down: radial layout of all fingers
+    #     eye=(0.0, 0.0, 1.5),
+    #     lookat=(0.0, 0.0, 0.4),
+    # )
+    viewer: ViewerCfg = ViewerCfg(  # thumb side (Y): thumb between camera and bottle
+        eye=(0.0, -1.2, 0.6),
+        lookat=(0.0, 0.0, 0.45),
     )
+    # viewer: ViewerCfg = ViewerCfg(  # opposite side (X): see fingers from behind
+    #     eye=(-1.2, 0.0, 0.6),
+    #     lookat=(0.0, 0.0, 0.45),
+    # )
 
     num_revolving_joints = 22 # 이건 뭘까?
     actuated_joint_names = [

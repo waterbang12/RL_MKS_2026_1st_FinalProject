@@ -605,16 +605,11 @@ def compute_rewards(
     contact_thumb   = contact_mag[:, 0]
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
-    contact_reward  = torch.tanh(contact_total / 5.0)
 
-    # thumb joints at actions[:, 22:27] — 10x smaller penalty to allow large thumb movements
-    action_penalty = action_penalty_scale * (
-        torch.sum(actions[:, :22] ** 2, dim=-1) +
-        0.1 * torch.sum(actions[:, 22:] ** 2, dim=-1)
-    )
+    action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + contact_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -626,7 +621,6 @@ def compute_rewards(
         "reward/min_tip": min_tip_reward,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
-        "reward/contact": contact_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
         "debug/contact_thumb":   contact_thumb,
