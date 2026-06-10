@@ -321,12 +321,26 @@ class GrEnv(DirectRLEnv):
             self.mano_kpts_pos_ref[:, 0],
             self.actions,
             self.hand_dof_vel,
+            self.obj_linvel,
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
             self.cfg.table_upper_z,
         )
 
         for key, value in logs_dict.items():
+            if key not in self.logs_dict:
+                self.logs_dict[key] = value.detach()
+            else:
+                self.logs_dict[key] += value.detach()
+
+        contact_mag = torch.norm(self.fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
+        contact_logs = {
+            "debug/contact_thumb":   contact_mag[:, 0],
+            "debug/contact_fingers": contact_mag[:, 1:].sum(dim=-1),
+            "debug/contact_total":   contact_mag.sum(dim=-1),
+            "debug/obj_linvel_z":    self.obj_linvel[:, 2],
+        }
+        for key, value in contact_logs.items():
             if key not in self.logs_dict:
                 self.logs_dict[key] = value.detach()
             else:
@@ -356,6 +370,15 @@ class GrEnv(DirectRLEnv):
 
         for key, value in self.logs_dict.items():
             self.extras["log"][key] = value.mean()
+
+        if self.play and len(self.logs_dict) > 0:
+            c_thumb   = self.logs_dict.get("debug/contact_thumb",   torch.zeros(1, device=self.device)).mean().item()
+            c_fingers = self.logs_dict.get("debug/contact_fingers", torch.zeros(1, device=self.device)).mean().item()
+            c_total   = self.logs_dict.get("debug/contact_total",   torch.zeros(1, device=self.device)).mean().item()
+            vel_z     = self.logs_dict.get("debug/obj_linvel_z",    torch.zeros(1, device=self.device)).mean().item()
+            lift      = self.logs_dict.get("reward/lift",           torch.zeros(1, device=self.device)).mean().item()
+            print(f"[Episode] contact: thumb={c_thumb:.3f}  fingers={c_fingers:.3f}  total={c_total:.3f} | obj_vel_z={vel_z:.4f} | lift={lift:.4f}")
+
         self.logs_dict = dict()
 
         self.successes[env_ids] = 0
@@ -556,6 +579,7 @@ def compute_rewards(
     wrist_pos_ref: torch.Tensor,
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
+    obj_linvel: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
@@ -587,10 +611,12 @@ def compute_rewards(
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
 
+    lift_vel_reward = torch.tanh(obj_linvel[:, 2].clamp(min=0.0) * 5.0)
+
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + wrist_reward + lift_reward + lift_vel_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -602,6 +628,7 @@ def compute_rewards(
         "reward/min_tip": min_tip_reward,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
+        "reward/lift_vel": lift_vel_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
     }

@@ -10,9 +10,7 @@ tmux new-session -d -s train "
         --task $TASK \
         --num_envs 1024 \
         --headless \
-        --video \
-        --video_length 480 \
-        --video_interval 1000
+    
 "
 
 echo "Training started in tmux session 'train'"
