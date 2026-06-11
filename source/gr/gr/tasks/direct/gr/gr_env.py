@@ -617,7 +617,8 @@ def compute_rewards(
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    lift_reward = 4.0 * torch.tanh(lift_height * 20.0)
+    contact_gate = torch.clamp(contact_total / 3.0, 0.0, 1.0)  # 0 reward if no grip
+    lift_reward = 2.0 * contact_gate * torch.tanh(lift_height * 20.0)
 
     contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
     contact_thumb   = contact_mag[:, 0]
