@@ -633,20 +633,20 @@ def compute_rewards(
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
-    lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)  # opens with 0.5N contact
-    lift_reward = 2.0 * contact_gate * torch.tanh(lift_height * 20.0)
-    vel_z_reward = 0.5 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)  # dense: reward upward motion while gripping
-
     contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
     contact_thumb   = contact_mag[:, 0]
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
 
+    lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
+    contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)  # opens with 0.5N contact
+    lift_reward = 2.0 * contact_gate * torch.tanh(lift_height * 20.0)
+    vel_z_reward = 0.5 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)  # dense: reward upward motion while gripping
+
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_reward_component + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_reward_component + wrist_reward + lift_reward + vel_z_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -660,6 +660,7 @@ def compute_rewards(
         "debug/thumb_err": thumb_err,
         "reward/wrist": wrist_reward,
         "reward/lift": lift_reward,
+        "reward/vel_z": vel_z_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
         "debug/contact_thumb":   contact_thumb,
