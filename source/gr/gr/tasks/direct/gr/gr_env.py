@@ -662,9 +662,10 @@ def compute_rewards(
     )
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    # no contact gate — direct lift/vel signal; sustained contact rewards 12x more than a single smack
+    contact_gate = torch.clamp(contact_total / 0.3, 0.0, 1.0)
     lift_reward = 5.0 * torch.tanh(lift_height * 20.0)
-    vel_z_reward = 2.0 * torch.tanh(obj_linvel[:, 2] * 10.0)
+    # gate vel_z only — prevents smack exploit while keeping direct lift signal
+    vel_z_reward = 2.0 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
