@@ -635,11 +635,9 @@ def compute_rewards(
     per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref_adj, p=2, dim=-1)  # (B, 5)
     thumb_err    = per_tip_err[:, 0]                                             # (B,)
 
-    # one-sided radial: free to press deeper than reference, penalized only when too far away
-    fingertip_dist = torch.norm(obj_to_robot_raw, p=2, dim=-1)           # (B, 5) actual dist from obj
-    ref_dist       = torch.norm(obj_to_ref_raw,   p=2, dim=-1)           # (B, 5) reference dist from obj
-    radial_over    = torch.clamp(fingertip_dist - ref_dist, min=0.0)     # (B, 5) >0 only when too far
-    other_tip_reward = torch.exp(-5.0 * radial_over[:, 1:]).min(dim=-1).values  # (B,)
+    # 3D position matching to reference (adjusted for actual capsule position via obj_offset)
+    # pressing 1-2mm deeper than reference costs only exp(-2*0.002)=0.996 — negligible
+    other_tip_reward = torch.exp(-2.0 * per_tip_err[:, 1:]).min(dim=-1).values  # (B,)
     fingertip_reward = dir_reward * other_tip_reward
 
     # thumb: two-scale near-contact approach reward
