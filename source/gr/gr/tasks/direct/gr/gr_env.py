@@ -162,9 +162,10 @@ class GrEnv(DirectRLEnv):
 
         # Override headless video camera (ViewerCfg only affects interactive GUI, not --video)
         self.sim.set_camera_view(
-            eye=np.array([1.25, -1.5, 1.5]),
-            target=np.array([1.25, 1.25, 0.45]),
+            eye=np.array([1.25, -1, 1.5]),
+            target=np.array([1, -1.25, 0.45]),
         )
+
 
 
     def _setup_data(self):
