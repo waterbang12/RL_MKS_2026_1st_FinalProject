@@ -162,8 +162,8 @@ class GrEnv(DirectRLEnv):
 
         # Override headless video camera (ViewerCfg only affects interactive GUI, not --video)
         self.sim.set_camera_view(
-            eye=np.array([0.0, -0.75, 0.75]),
-            target=np.array([0.0, 0.05, 0.48]),
+            eye=np.array([1.25, -1.5, 1.5]),
+            target=np.array([1.25, 1.25, 0.45]),
         )
 
 
@@ -636,6 +636,7 @@ def compute_rewards(
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)  # opens with 0.5N contact
     lift_reward = 2.0 * contact_gate * torch.tanh(lift_height * 20.0)
+    vel_z_reward = 0.5 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)  # dense: reward upward motion while gripping
 
     contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
     contact_thumb   = contact_mag[:, 0]
