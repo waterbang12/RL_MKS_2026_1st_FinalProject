@@ -160,6 +160,12 @@ class GrEnv(DirectRLEnv):
 
         self._setup_data()
 
+        # Override headless video camera (ViewerCfg only affects interactive GUI, not --video)
+        self.sim.set_camera_view(
+            eye=np.array([0.0, -0.75, 0.75]),
+            target=np.array([0.0, 0.05, 0.48]),
+        )
+
 
     def _setup_data(self):
         # Provided code. Do not modify.
@@ -194,6 +200,17 @@ class GrEnv(DirectRLEnv):
         self.hand_rot_reset[:] = self.inputs['R_init'].to(self.device)
         self.hand_pos_reset[:] = (self.inputs['t_init']).to(self.device) + to_center_pos[0]
         self.hand_pos_reset[:,2] = self.hand_pos_reset[:,2] + 0.01
+
+        # Pinch geometry diagnostic — check if thumb and index are on opposite sides of capsule
+        mid = min(100, seq_len - 1)
+        obj_p   = self.obj_pos_seq[mid].cpu()          # (3,)
+        thumb_p = self.fingertip_pos_seq[mid, 0].cpu() # thumb tip (MANO_fingertips[0]=4)
+        index_p = self.fingertip_pos_seq[mid, 1].cpu() # index tip (MANO_fingertips[1]=8)
+        v_th = thumb_p - obj_p;  v_th = v_th / (v_th.norm() + 1e-8)
+        v_ix = index_p - obj_p;  v_ix = v_ix / (v_ix.norm() + 1e-8)
+        dot = (v_th * v_ix).sum().item()
+        print(f"[PinchCheck] frame={mid}  thumb_offset={( thumb_p - obj_p).numpy()}  index_offset={(index_p - obj_p).numpy()}")
+        print(f"[PinchCheck] cos_angle={dot:.3f}  ({'OPPOSITE SIDES = pinch OK' if dot < -0.2 else 'SAME SIDE = no pinch!' if dot > 0.3 else 'roughly orthogonal'})")
 
 
     def _setup_scene(self):
@@ -617,7 +634,7 @@ def compute_rewards(
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    contact_gate = torch.clamp(contact_total / 3.0, 0.0, 1.0)  # 0 reward if no grip
+    contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)  # opens with 0.5N contact
     lift_reward = 2.0 * contact_gate * torch.tanh(lift_height * 20.0)
 
     contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
