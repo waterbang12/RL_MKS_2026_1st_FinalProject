@@ -352,6 +352,16 @@ class GrEnv(DirectRLEnv):
             else:
                 self.logs_dict[key] += value.detach()
 
+        if self.play:
+            step = self.episode_length_buf[0].item()
+            if step % 10 == 0:  # print every 10 steps
+                ct = logs_dict["debug/contact_total"][0].item()
+                cth = logs_dict["debug/contact_thumb"][0].item()
+                cfi = logs_dict["debug/contact_fingers"][0].item()
+                vz = logs_dict["debug/obj_linvel_z"][0].item()
+                lh = (self.obj_pos[0, 2] - self.obj_rest_z).clamp(min=0).item()
+                print(f"  step={step:3d}  contact: thumb={cth:.2f} fingers={cfi:.2f} total={ct:.2f} | obj_vz={vz:.4f} | lift_h={lh:.4f}")
+
         if "log" not in self.extras:
             self.extras["log"] = dict()
 
