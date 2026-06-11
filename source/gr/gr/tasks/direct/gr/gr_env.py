@@ -649,8 +649,12 @@ def compute_rewards(
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
 
-    # contact reward: requires BOTH thumb AND fingers pressing simultaneously (product prevents one-sided exploit)
-    contact_reward = 1.0 * torch.tanh(contact_thumb / 0.5) * torch.tanh(contact_fingers / 1.0)
+    # contact reward: additive terms bootstrap each side, product requires both simultaneously
+    contact_reward = (
+        1.0 * torch.tanh(contact_thumb   / 0.5) +   # gradient even when only thumb touches
+        1.0 * torch.tanh(contact_fingers / 1.0) +   # gradient even when only fingers touch
+        2.0 * torch.tanh(contact_thumb   / 0.5) * torch.tanh(contact_fingers / 1.0)  # bonus for both
+    )
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)
