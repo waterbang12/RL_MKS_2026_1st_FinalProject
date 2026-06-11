@@ -636,11 +636,11 @@ def compute_rewards(
     thumb_err    = per_tip_err[:, 0]                                             # (B,)
     other_err    = per_tip_err[:, 1:]                                            # (B, 4)
 
-    # other 4 fingers: 2-term product (stable, was working)
-    other_tip_reward = torch.exp(-2.0 * other_err).min(dim=-1).values           # (B,)
-    fingertip_reward = dir_reward * other_tip_reward
+    # direction only — no absolute position penalty so fingers can press deeper than reference
+    other_tip_reward = torch.exp(-2.0 * other_err).min(dim=-1).values           # (B,) kept for logging
+    fingertip_reward = dir_reward
 
-    # thumb: separate additive term — two-scale so near-contact pressure doesn't destabilize product
+    # thumb: two-scale near-contact approach reward
     thumb_reward_component = (
         0.3 * torch.exp(-2.0  * thumb_err) +
         0.7 * torch.exp(-20.0 * thumb_err)
@@ -654,17 +654,17 @@ def compute_rewards(
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
 
-    # contact reward: additive terms bootstrap each side, product requires both simultaneously
+    # 3x stronger contact signal, lower thresholds so small forces register
     contact_reward = (
-        1.0 * torch.tanh(contact_thumb   / 0.5) +   # gradient even when only thumb touches
-        1.0 * torch.tanh(contact_fingers / 1.0) +   # gradient even when only fingers touch
-        2.0 * torch.tanh(contact_thumb   / 0.5) * torch.tanh(contact_fingers / 1.0)  # bonus for both
+        3.0 * torch.tanh(contact_thumb   / 0.3) +
+        3.0 * torch.tanh(contact_fingers / 0.8) +
+        6.0 * torch.tanh(contact_thumb   / 0.3) * torch.tanh(contact_fingers / 0.8)
     )
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)
-    lift_reward = 2.0 * contact_gate * torch.tanh(lift_height * 20.0)
-    vel_z_reward = 0.5 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
+    # no contact gate — direct lift/vel signal; sustained contact rewards 12x more than a single smack
+    lift_reward = 5.0 * torch.tanh(lift_height * 20.0)
+    vel_z_reward = 2.0 * torch.tanh(obj_linvel[:, 2] * 10.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
