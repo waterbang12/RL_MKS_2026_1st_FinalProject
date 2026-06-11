@@ -649,15 +649,18 @@ def compute_rewards(
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
 
+    # contact reward: requires BOTH thumb AND fingers pressing simultaneously (product prevents one-sided exploit)
+    contact_reward = 1.0 * torch.tanh(contact_thumb / 0.5) * torch.tanh(contact_fingers / 1.0)
+
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)  # opens with 0.5N contact
+    contact_gate = torch.clamp(contact_total / 0.5, 0.0, 1.0)
     lift_reward = 2.0 * contact_gate * torch.tanh(lift_height * 20.0)
-    vel_z_reward = 0.5 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)  # dense: reward upward motion while gripping
+    vel_z_reward = 0.5 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_reward_component + wrist_reward + lift_reward + vel_z_reward + action_penalty + dof_vel_penalty
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_reward_component + wrist_reward + contact_reward + lift_reward + vel_z_reward + action_penalty + dof_vel_penalty
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -670,6 +673,7 @@ def compute_rewards(
         "reward/thumb_tip": thumb_reward_component,
         "debug/thumb_err": thumb_err,
         "reward/wrist": wrist_reward,
+        "reward/contact": contact_reward,
         "reward/lift": lift_reward,
         "reward/vel_z": vel_z_reward,
         "reward/action_penalty": action_penalty,
