@@ -634,11 +634,13 @@ def compute_rewards(
     fingertip_pos_ref_adj = fingertip_pos_ref + obj_offset        # (B, 5, 3)
     per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref_adj, p=2, dim=-1)  # (B, 5)
     thumb_err    = per_tip_err[:, 0]                                             # (B,)
-    other_err    = per_tip_err[:, 1:]                                            # (B, 4)
 
-    # direction only — no absolute position penalty so fingers can press deeper than reference
-    other_tip_reward = torch.exp(-2.0 * other_err).min(dim=-1).values           # (B,) kept for logging
-    fingertip_reward = dir_reward
+    # one-sided radial: free to press deeper than reference, penalized only when too far away
+    fingertip_dist = torch.norm(obj_to_robot_raw, p=2, dim=-1)           # (B, 5) actual dist from obj
+    ref_dist       = torch.norm(obj_to_ref_raw,   p=2, dim=-1)           # (B, 5) reference dist from obj
+    radial_over    = torch.clamp(fingertip_dist - ref_dist, min=0.0)     # (B, 5) >0 only when too far
+    other_tip_reward = torch.exp(-5.0 * radial_over[:, 1:]).min(dim=-1).values  # (B,)
+    fingertip_reward = dir_reward * other_tip_reward
 
     # thumb: two-scale near-contact approach reward
     thumb_reward_component = (
