@@ -619,15 +619,20 @@ def compute_rewards(
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
-    # method 1: object-relative direction — gradient goes around object, not through it
-    obj_to_ref   = fingertip_pos_ref - obj_pos.unsqueeze(1)  # (B, 5, 3)
-    obj_to_robot = fingertip_pos     - obj_pos.unsqueeze(1)  # (B, 5, 3)
-    obj_to_ref_n   = obj_to_ref   / (torch.norm(obj_to_ref,   p=2, dim=-1, keepdim=True) + 1e-8)
-    obj_to_robot_n = obj_to_robot / (torch.norm(obj_to_robot, p=2, dim=-1, keepdim=True) + 1e-8)
-    cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1)   # (B, 5), +1=correct side
-    dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))  # all 5 must be on correct side
+    # direction relative to REFERENCE obj for ref, ACTUAL obj for robot
+    # invariant to whether capsule lifted: robot fingertip direction from actual capsule
+    # matches reference fingertip direction from reference capsule
+    obj_to_ref_raw   = fingertip_pos_ref - obj_pos_ref.unsqueeze(1)  # (B, 5, 3)
+    obj_to_robot_raw = fingertip_pos     - obj_pos.unsqueeze(1)      # (B, 5, 3)
+    obj_to_ref_n   = obj_to_ref_raw   / (torch.norm(obj_to_ref_raw,   p=2, dim=-1, keepdim=True) + 1e-8)
+    obj_to_robot_n = obj_to_robot_raw / (torch.norm(obj_to_robot_raw, p=2, dim=-1, keepdim=True) + 1e-8)
+    cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1)
+    dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))
 
-    per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
+    # shift fingertip targets by object's lag so targets stay near actual capsule even if it didn't lift
+    obj_offset = (obj_pos - obj_pos_ref).unsqueeze(1)            # (B, 1, 3)
+    fingertip_pos_ref_adj = fingertip_pos_ref + obj_offset        # (B, 5, 3)
+    per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref_adj, p=2, dim=-1)  # (B, 5)
     thumb_err    = per_tip_err[:, 0]                                             # (B,)
     other_err    = per_tip_err[:, 1:]                                            # (B, 4)
 
