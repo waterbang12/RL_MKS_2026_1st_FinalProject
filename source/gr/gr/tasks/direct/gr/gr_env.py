@@ -661,7 +661,7 @@ def compute_rewards(
     )
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    contact_gate = torch.clamp(contact_total / 0.3, 0.0, 1.0)
+    contact_gate = torch.clamp(contact_total / 0.1, 0.0, 1.0)
     lift_reward = 5.0 * torch.tanh(lift_height * 20.0)
     # gate vel_z only — prevents smack exploit while keeping direct lift signal
     vel_z_reward = 2.0 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
