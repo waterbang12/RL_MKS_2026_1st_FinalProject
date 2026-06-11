@@ -654,11 +654,10 @@ def compute_rewards(
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
 
-    # 3x stronger contact signal, lower thresholds so small forces register
     contact_reward = (
-        3.0 * torch.tanh(contact_thumb   / 0.3) +
-        3.0 * torch.tanh(contact_fingers / 0.8) +
-        6.0 * torch.tanh(contact_thumb   / 0.3) * torch.tanh(contact_fingers / 0.8)
+        2.0 * torch.tanh(contact_thumb   / 0.3) +
+        2.0 * torch.tanh(contact_fingers / 0.8) +
+        4.0 * torch.tanh(contact_thumb   / 0.3) * torch.tanh(contact_fingers / 0.8)
     )
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)

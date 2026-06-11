@@ -249,7 +249,7 @@ class GrEnvCfg(DirectRLEnvCfg):
 
     action_dt = 1 / action_fps
     
-    action_penalty_scale = -0.004
+    action_penalty_scale = -0.02
     dof_penalty_scale = -0.001
     capsule_radius: float = 0.04
 
