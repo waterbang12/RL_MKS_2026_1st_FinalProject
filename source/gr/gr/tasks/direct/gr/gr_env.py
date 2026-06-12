@@ -736,6 +736,7 @@ def compute_rewards(
         "debug/radial_over_mean": radial_over.mean(dim=-1),
         "debug/contact_thumb":    contact_thumb,
         "debug/contact_fingers":  contact_fingers,
+        "debug/contact_total":    contact_total,
         "debug/lift_height":      lift_height,
         "debug/obj_linvel_z":     obj_linvel[:, 2],
         "debug/phase":            prog_f,
