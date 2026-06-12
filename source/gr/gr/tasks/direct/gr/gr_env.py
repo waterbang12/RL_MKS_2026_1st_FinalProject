@@ -622,9 +622,9 @@ def compute_rewards(
 ):
     # --- phase masks (per-env, hard boundaries from reference data) ---
     prog_f        = progress.float()
-    approach_mask = (prog_f < 26.0).float()   # 0-25:  move to pregrasp
-    grasp_mask    = ((prog_f >= 26.0) & (prog_f < 40.0)).float()  # 26-39: establish grip
-    lift_mask     = (prog_f >= 40.0).float()  # 40-249: carry and track
+    approach_mask = (prog_f < 26.0).float()                        # 0-25:  move to pregrasp
+    grasp_mask    = ((prog_f >= 26.0) & (prog_f < 80.0)).float()  # 26-79: establish grip
+    lift_mask     = (prog_f >= 80.0).float()                       # 80-249: carry and track
 
     post_approach = grasp_mask + lift_mask    # grasp + lift combined
 
@@ -665,7 +665,7 @@ def compute_rewards(
     # ── APPROACH (steps 0-25) ──────────────────────────────────────────────
     # drive all fingertips to pregrasp pose in object-relative space
     approach_err    = torch.norm(obj_to_robot - pregrasp_rel.unsqueeze(0), p=2, dim=-1).mean(dim=-1)
-    approach_reward = approach_mask * 3.0 * torch.exp(-10.0 * approach_err)
+    approach_reward = approach_mask * (3.0 * torch.exp(-10.0 * approach_err) + dir_reward)
 
     wrist_pre_err  = torch.norm(hand_pos - wrist_pos_pregrasp_ref, p=2, dim=-1)
     wrist_reward   = approach_mask * torch.exp(-2.0 * wrist_pre_err)
