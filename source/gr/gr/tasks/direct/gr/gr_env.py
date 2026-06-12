@@ -340,6 +340,7 @@ class GrEnv(DirectRLEnv):
             self.obj_fingertip_pos_seq_offset[30],
             self.hand_pos,
             self.mano_kpts_pos_ref[:, 0],
+            self.mano_kpts_pos_seq[30, 0],
             self.actions,
             self.hand_dof_vel,
             self.fingertip_contact_forces,
@@ -347,7 +348,6 @@ class GrEnv(DirectRLEnv):
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
             self.obj_rest_z,
-            self.episode_length_buf.float(),
         )
 
         for key, value in logs_dict.items():
@@ -609,6 +609,7 @@ def compute_rewards(
     pregrasp_rel: torch.Tensor,
     hand_pos: torch.Tensor,
     wrist_pos_ref: torch.Tensor,
+    wrist_pos_pregrasp_ref: torch.Tensor,
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
     fingertip_contact_forces: torch.Tensor,
@@ -616,7 +617,6 @@ def compute_rewards(
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
-    progress: torch.Tensor,
 ):
     obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
     obj_pos_reward = torch.exp(-2.0 * obj_pos_err)
@@ -659,19 +659,6 @@ def compute_rewards(
     # active only before grip established and only for first 35 steps
     fingertip_rel    = obj_to_robot                                      # (B, 5, 3)
     approach_err     = torch.norm(fingertip_rel - pregrasp_rel.unsqueeze(0), p=2, dim=-1).mean(dim=-1)
-    phase_gate       = (progress < 35.0).float()
-
-    per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
-    thumb_err   = per_tip_err[:, 0]
-    other_tip_reward = torch.exp(-2.0 * per_tip_err[:, 1:]).min(dim=-1).values  # logging only
-
-    thumb_reward_component = (
-        0.3 * torch.exp(-2.0  * thumb_err) +
-        0.7 * torch.exp(-20.0 * thumb_err)
-    )
-
-    wrist_err    = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
-    wrist_reward = torch.exp(-2.0 * wrist_err)
 
     contact_mag     = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
     contact_thumb   = contact_mag[:, 0]
@@ -681,6 +668,24 @@ def compute_rewards(
     thumb_contact_gate  = torch.tanh(contact_thumb   / 0.3)
     finger_contact_gate = torch.tanh(contact_fingers / 0.8)
     bilateral_gate      = thumb_contact_gate * finger_contact_gate
+
+    per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
+    thumb_err   = per_tip_err[:, 0]
+    other_tip_reward = torch.exp(-2.0 * per_tip_err[:, 1:]).min(dim=-1).values  # logging only
+
+    # gated: before grip → track world-space thumb ref; after grip → silent
+    thumb_reward_component = (1.0 - bilateral_gate) * (
+        0.3 * torch.exp(-2.0  * thumb_err) +
+        0.7 * torch.exp(-20.0 * thumb_err)
+    )
+
+    # wrist: before grip → hold at pregrasp frame 30; after grip → follow full lifted ref
+    wrist_pre_err  = torch.norm(hand_pos - wrist_pos_pregrasp_ref, p=2, dim=-1)
+    wrist_full_err = torch.norm(hand_pos - wrist_pos_ref,          p=2, dim=-1)
+    wrist_reward = (
+        (1.0 - bilateral_gate) * torch.exp(-2.0 * wrist_pre_err)
+        + bilateral_gate       * torch.exp(-2.0 * wrist_full_err)
+    )
 
     # dir_gate on both contact and lift — tip grasping cannot unlock lift reward
     contact_reward = dir_gate * (
@@ -697,7 +702,7 @@ def compute_rewards(
     vel_z_reward = grasp_gate * 0.8 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
 
     # approach reward: pregrasp frame target, off once bilateral contact established
-    approach_reward = phase_gate * (1.0 - bilateral_gate) * torch.exp(-10.0 * approach_err)
+    approach_reward = (1.0 - bilateral_gate) * torch.exp(-10.0 * approach_err)
 
     action_penalty  = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale    * torch.sum(hand_dof_vel ** 2, dim=-1)
