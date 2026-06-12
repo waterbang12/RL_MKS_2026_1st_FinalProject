@@ -658,7 +658,9 @@ def compute_rewards(
     )
 
     wrist_err    = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
-    wrist_reward = torch.exp(-2.0 * wrist_err)
+    # gate wrist reward behind bilateral contact: before grip, wrist reference moves upward and
+    # fights finger approach; after grip, it helps track the lift trajectory
+    wrist_reward = bilateral_gate * torch.exp(-2.0 * wrist_err)
 
     contact_mag     = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
     contact_thumb   = contact_mag[:, 0]
