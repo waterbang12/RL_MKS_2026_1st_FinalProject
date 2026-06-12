@@ -337,6 +337,7 @@ class GrEnv(DirectRLEnv):
             self.obj_rot_ref,
             self.fingertip_pos,
             self.fingertip_pos_ref,
+            self.obj_fingertip_pos_seq_offset[30],
             self.hand_pos,
             self.mano_kpts_pos_ref[:, 0],
             self.actions,
@@ -346,6 +347,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
             self.obj_rest_z,
+            self.episode_length_buf.float(),
         )
 
         for key, value in logs_dict.items():
@@ -604,6 +606,7 @@ def compute_rewards(
     obj_rot_ref: torch.Tensor,
     fingertip_pos: torch.Tensor,
     fingertip_pos_ref: torch.Tensor,
+    pregrasp_rel: torch.Tensor,
     hand_pos: torch.Tensor,
     wrist_pos_ref: torch.Tensor,
     actions: torch.Tensor,
@@ -613,6 +616,7 @@ def compute_rewards(
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
+    progress: torch.Tensor,
 ):
     obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
     obj_pos_reward = torch.exp(-2.0 * obj_pos_err)
@@ -630,10 +634,18 @@ def compute_rewards(
     cos_sim    = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1).clamp(-1.0, 1.0)  # (B, 5)
     dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))                 # (B,)
 
-    # radial: penalize farther than reference radius, allow pressing in
-    fingertip_dist = torch.norm(obj_to_robot, p=2, dim=-1)        # (B, 5)
-    ref_dist       = torch.norm(obj_to_ref,   p=2, dim=-1)        # (B, 5)
-    radial_over    = torch.clamp(fingertip_dist - ref_dist, min=0.0)
+    # per-finger dir gate: thumb and fingers gated separately — mean can hide a bad thumb
+    per_finger_dir  = torch.clamp(((cos_sim + 1.0) * 0.5 - 0.3) / 0.4, 0.0, 1.0)  # (B, 5)
+    thumb_dir_gate  = per_finger_dir[:, 0]                                           # (B,)
+    finger_dir_gate = per_finger_dir[:, 1:].mean(dim=-1)                             # (B,)
+    dir_gate        = thumb_dir_gate * finger_dir_gate                               # (B,)
+
+    # radial: press_margin shifts target 5mm inside reference surface to eliminate dead zone
+    fingertip_dist = torch.norm(obj_to_robot, p=2, dim=-1)              # (B, 5)
+    ref_dist       = torch.norm(obj_to_ref,   p=2, dim=-1)              # (B, 5)
+    press_margin   = 0.005
+    target_dist    = ref_dist - press_margin
+    radial_over    = torch.clamp(fingertip_dist - target_dist, min=0.0) # (B, 5)
 
     radial_reward_mean = torch.exp(-15.0 * radial_over).mean(dim=-1)
     radial_reward_min  = torch.exp(-20.0 * radial_over).min(dim=-1).values
@@ -642,6 +654,12 @@ def compute_rewards(
     fingertip_reward = 0.5 * dir_reward + 1.5 * dir_reward * radial_reward
 
     near_gate = torch.clamp((radial_reward - 0.45) / 0.40, 0.0, 1.0)
+
+    # approach reward: drives fingers to pregrasp pose (frame 30) in object-relative space,
+    # active only before grip established and only for first 35 steps
+    fingertip_rel    = obj_to_robot                                      # (B, 5, 3)
+    approach_err     = torch.norm(fingertip_rel - pregrasp_rel.unsqueeze(0), p=2, dim=-1).mean(dim=-1)
+    phase_gate       = (progress < 35.0).float()
 
     per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
     thumb_err   = per_tip_err[:, 0]
@@ -664,10 +682,7 @@ def compute_rewards(
     finger_contact_gate = torch.tanh(contact_fingers / 0.8)
     bilateral_gate      = thumb_contact_gate * finger_contact_gate
 
-    # dir_gate: tip approach gives cos_sim≈0 → dir_mean≈0.5 → dir_gate≈0 → no contact reward
-    dir_mean = ((cos_sim + 1.0) * 0.5).mean(dim=-1)
-    dir_gate = torch.clamp((dir_mean - 0.3) / 0.4, 0.0, 1.0)
-
+    # dir_gate on both contact and lift — tip grasping cannot unlock lift reward
     contact_reward = dir_gate * (
         2.0 * thumb_contact_gate
         + 2.0 * finger_contact_gate
@@ -677,9 +692,12 @@ def compute_rewards(
     lift_height  = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     contact_gate = torch.clamp(contact_total / 0.1, 0.0, 1.0)
 
-    grasp_gate   = near_gate * bilateral_gate
+    grasp_gate   = dir_gate * near_gate * bilateral_gate
     lift_reward  = grasp_gate * 5.0 * torch.tanh(lift_height * 20.0)
     vel_z_reward = grasp_gate * 0.8 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
+
+    # approach reward: pregrasp frame target, off once bilateral contact established
+    approach_reward = phase_gate * (1.0 - bilateral_gate) * torch.exp(-10.0 * approach_err)
 
     action_penalty  = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale    * torch.sum(hand_dof_vel ** 2, dim=-1)
@@ -688,6 +706,7 @@ def compute_rewards(
         obj_pos_reward
         + obj_rot_reward
         + fingertip_reward
+        + approach_reward
         + thumb_reward_component
         + wrist_reward
         + contact_reward
@@ -703,6 +722,7 @@ def compute_rewards(
         "reward/obj_pos":          obj_pos_reward,
         "reward/obj_rot":          obj_rot_reward,
         "reward/fingertip":        fingertip_reward,
+        "reward/approach":         approach_reward,
         "reward/dir":              dir_reward,
         "reward/radial":           radial_reward,
         "reward/other_tip_min":    other_tip_reward,
@@ -717,9 +737,12 @@ def compute_rewards(
         "gate/near":               near_gate,
         "gate/bilateral":          bilateral_gate,
         "gate/grasp":              grasp_gate,
+        "gate/thumb_dir":          thumb_dir_gate,
+        "gate/finger_dir":         finger_dir_gate,
         "gate/thumb_contact":      thumb_contact_gate,
         "gate/finger_contact":     finger_contact_gate,
-        "debug/dir_mean":          dir_mean,
+        "debug/approach_err":      approach_err,
+        "debug/dir_mean":          ((cos_sim + 1.0) * 0.5).mean(dim=-1),
         "debug/radial_over_mean":  radial_over.mean(dim=-1),
         "debug/thumb_err":         thumb_err,
         "debug/contact_thumb":     contact_thumb,
