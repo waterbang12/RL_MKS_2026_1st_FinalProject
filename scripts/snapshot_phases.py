@@ -57,8 +57,9 @@ def find_phase_boundaries(lift, vel_z, tip_dists, obj_z, table_z=0.4):
     VEL_THRESH    = 0.02    # 2 cm/s upward
     CONTACT_THRESH = 0.06   # within 6 cm of obj center (capsule radius ~4 cm)
 
-    # lift-off: first frame obj is meaningfully above table
-    lift_frame = next((t for t in range(T) if lift[t] > LIFT_THRESH), T - 1)
+    # lift-off: first frame obj rises meaningfully above its initial resting height
+    initial_z  = obj_z[0].item()
+    lift_frame = next((t for t in range(T) if obj_z[t].item() - initial_z > LIFT_THRESH), T - 1)
 
     # contact: all 5 tips within CONTACT_THRESH simultaneously, sustained for 3 frames
     all_contact = (tip_dists < CONTACT_THRESH).all(dim=-1)  # (T,)
