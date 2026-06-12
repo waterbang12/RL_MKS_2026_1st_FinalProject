@@ -619,50 +619,83 @@ def compute_rewards(
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
-    obj_to_ref   = fingertip_pos_ref - obj_pos.unsqueeze(1)  # (B, 5, 3)
-    obj_to_robot = fingertip_pos     - obj_pos.unsqueeze(1)  # (B, 5, 3)
-    obj_to_ref_n   = obj_to_ref   / (torch.norm(obj_to_ref,   p=2, dim=-1, keepdim=True) + 1e-8)
+    # reference direction: reference capsule -> reference fingertip (pure grip direction, no upward bias)
+    # robot direction: actual capsule -> robot fingertip
+    obj_to_ref = fingertip_pos_ref - obj_pos_ref.unsqueeze(1)   # (B, 5, 3)
+    obj_to_robot = fingertip_pos - obj_pos.unsqueeze(1)         # (B, 5, 3)
+
+    obj_to_ref_n = obj_to_ref / (torch.norm(obj_to_ref, p=2, dim=-1, keepdim=True) + 1e-8)
     obj_to_robot_n = obj_to_robot / (torch.norm(obj_to_robot, p=2, dim=-1, keepdim=True) + 1e-8)
-    cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1)
+
+    cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1).clamp(-1.0, 1.0)
     dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))
 
-    per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
-    thumb_err    = per_tip_err[:, 0]                                             # (B,)
+    # radial approach: penalize if farther from capsule than reference radius, allow pressing in
+    fingertip_dist = torch.norm(obj_to_robot, p=2, dim=-1)  # (B, 5)
+    ref_dist = torch.norm(obj_to_ref, p=2, dim=-1)          # (B, 5)
+    radial_over = torch.clamp(fingertip_dist - ref_dist, min=0.0)  # (B, 5)
 
-    other_tip_reward = torch.exp(-2.0 * per_tip_err[:, 1:]).min(dim=-1).values  # (B,)
-    fingertip_reward = dir_reward * other_tip_reward
+    radial_reward_mean = torch.exp(-15.0 * radial_over).mean(dim=-1)
+    radial_reward_min = torch.exp(-20.0 * radial_over).min(dim=-1).values
+    radial_reward = 0.7 * radial_reward_mean + 0.3 * radial_reward_min
 
-    # thumb: two-scale near-contact approach reward
+    # direction alone doesn't drive fingers close; dir*radial requires both direction AND proximity
+    fingertip_reward = 0.5 * dir_reward + 1.5 * dir_reward * radial_reward
+
+    # gate lift until fingers are actually close to the capsule
+    near_gate = torch.clamp((radial_reward - 0.45) / 0.40, 0.0, 1.0)
+
+    per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
+    thumb_err = per_tip_err[:, 0]
+    other_tip_reward = torch.exp(-2.0 * per_tip_err[:, 1:]).min(dim=-1).values  # logging only
+
     thumb_reward_component = (
-        0.3 * torch.exp(-2.0  * thumb_err) +
-        0.7 * torch.exp(-20.0 * thumb_err)
+        0.3 * torch.exp(-2.0 * thumb_err)
+        + 0.7 * torch.exp(-20.0 * thumb_err)
     )
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
 
     contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
-    contact_thumb   = contact_mag[:, 0]
+    contact_thumb = contact_mag[:, 0]
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
-    contact_total   = contact_mag.sum(dim=-1)
+    contact_total = contact_mag.sum(dim=-1)
+
+    thumb_contact_gate = torch.tanh(contact_thumb / 0.3)
+    finger_contact_gate = torch.tanh(contact_fingers / 0.8)
+    bilateral_gate = thumb_contact_gate * finger_contact_gate
 
     contact_reward = (
-        2.0 * torch.tanh(contact_thumb   / 0.3) +
-        2.0 * torch.tanh(contact_fingers / 0.8) +
-        4.0 * torch.tanh(contact_thumb   / 0.3) * torch.tanh(contact_fingers / 0.8)
+        2.0 * thumb_contact_gate
+        + 2.0 * finger_contact_gate
+        + 4.0 * bilateral_gate
     )
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     contact_gate = torch.clamp(contact_total / 0.1, 0.0, 1.0)
-    # bilateral gate: both sides must contact — blocks tipping exploit, consistent with pouring grip too
-    bilateral_gate = torch.tanh(contact_thumb / 0.3) * torch.tanh(contact_fingers / 0.8)
-    lift_reward = bilateral_gate * 5.0 * torch.tanh(lift_height * 20.0)
-    vel_z_reward = bilateral_gate * 2.0 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
+
+    # grasp_gate: fingers must be close (near_gate) AND bilateral contact — blocks tipping exploit
+    grasp_gate = near_gate * bilateral_gate
+
+    lift_reward = grasp_gate * 5.0 * torch.tanh(lift_height * 20.0)
+    vel_z_reward = grasp_gate * 0.8 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_reward_component + wrist_reward + contact_reward + lift_reward + vel_z_reward + action_penalty + dof_vel_penalty
+    reward = (
+        obj_pos_reward
+        + obj_rot_reward
+        + fingertip_reward
+        + thumb_reward_component
+        + wrist_reward
+        + contact_reward
+        + lift_reward
+        + vel_z_reward
+        + action_penalty
+        + dof_vel_penalty
+    )
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
@@ -671,19 +704,32 @@ def compute_rewards(
         "reward/obj_rot": obj_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/dir": dir_reward,
+        "reward/radial": radial_reward,
+        "reward/radial_mean": radial_reward_mean,
+        "reward/radial_min": radial_reward_min,
         "reward/other_tip_min": other_tip_reward,
         "reward/thumb_tip": thumb_reward_component,
-        "debug/thumb_err": thumb_err,
         "reward/wrist": wrist_reward,
         "reward/contact": contact_reward,
         "reward/lift": lift_reward,
         "reward/vel_z": vel_z_reward,
         "reward/action_penalty": action_penalty,
         "reward/dof_vel_penalty": dof_vel_penalty,
-        "debug/contact_thumb":   contact_thumb,
+        "gate/near": near_gate,
+        "gate/bilateral": bilateral_gate,
+        "gate/grasp": grasp_gate,
+        "gate/thumb_contact": thumb_contact_gate,
+        "gate/finger_contact": finger_contact_gate,
+        "debug/thumb_err": thumb_err,
+        "debug/tip_err_mean": per_tip_err.mean(dim=-1),
+        "debug/tip_err_max": per_tip_err.max(dim=-1).values,
+        "debug/radial_over_mean": radial_over.mean(dim=-1),
+        "debug/radial_over_max": radial_over.max(dim=-1).values,
+        "debug/contact_thumb": contact_thumb,
         "debug/contact_fingers": contact_fingers,
-        "debug/contact_total":   contact_total,
-        "debug/obj_linvel_z":    obj_linvel[:, 2],
+        "debug/contact_total": contact_total,
+        "debug/lift_height": lift_height,
+        "debug/obj_linvel_z": obj_linvel[:, 2],
     }
 
     return reward, logs_dict
