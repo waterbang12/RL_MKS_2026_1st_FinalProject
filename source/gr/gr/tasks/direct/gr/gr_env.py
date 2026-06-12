@@ -346,6 +346,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
             self.obj_rest_z,
+            self.cfg.capsule_radius,
         )
 
         for key, value in logs_dict.items():
@@ -613,6 +614,7 @@ def compute_rewards(
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
+    capsule_radius: float,
 ):
     obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
     obj_pos_reward = torch.exp(-2.0 * obj_pos_err)
@@ -632,11 +634,10 @@ def compute_rewards(
     cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1).clamp(-1.0, 1.0)  # (B, 5)
     dir_per_finger = (cos_sim + 1.0) * 0.5  # map [-1,1] -> [0,1]
 
-    # radial closing: 1.0 if at or inside reference radius, decays if outside
-    fingertip_dist = torch.norm(obj_to_robot, p=2, dim=-1)       # (B, 5)
-    ref_dist       = torch.norm(obj_to_ref,   p=2, dim=-1)       # (B, 5)
-    radial_over    = torch.clamp(fingertip_dist - ref_dist, min=0.0)  # (B, 5)
-    radial_per_finger = torch.exp(-15.0 * radial_over)           # (B, 5)
+    # radial closing: pulls toward capsule surface, always has gradient (no dead zone at ref_dist)
+    fingertip_dist    = torch.norm(obj_to_robot, p=2, dim=-1)         # (B, 5)
+    surface_dist      = (fingertip_dist - capsule_radius).clamp(min=0.0)  # 0 on/inside surface
+    radial_per_finger = torch.exp(-20.0 * surface_dist)               # (B, 5)
 
     # per-finger product: direction AND proximity both required
     per_finger = dir_per_finger * radial_per_finger              # (B, 5)
@@ -650,10 +651,10 @@ def compute_rewards(
     near_gate = torch.clamp((fingertip_reward - 0.3) / 0.4, 0.0, 1.0)
 
     # thumb: two-scale for coarse approach + near-contact precision
-    thumb_dist = fingertip_dist[:, 0]
+    thumb_surface_dist = surface_dist[:, 0]
     thumb_reward_component = dir_per_finger[:, 0] * (
-        0.3 * torch.exp(-8.0  * radial_over[:, 0]) +
-        0.7 * torch.exp(-40.0 * radial_over[:, 0])
+        0.3 * torch.exp(-8.0  * thumb_surface_dist) +
+        0.7 * torch.exp(-40.0 * thumb_surface_dist)
     )
 
     wrist_err    = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
@@ -719,9 +720,9 @@ def compute_rewards(
         "gate/thumb_contact":    thumb_contact_gate,
         "gate/finger_contact":   finger_contact_gate,
         "debug/dir_mean":        dir_mean,
-        "debug/radial_over_mean":radial_over.mean(dim=-1),
-        "debug/radial_over_max": radial_over.max(dim=-1).values,
-        "debug/thumb_dist":      thumb_dist,
+        "debug/surface_dist_mean":surface_dist.mean(dim=-1),
+        "debug/surface_dist_max": surface_dist.max(dim=-1).values,
+        "debug/thumb_surface_dist": thumb_surface_dist,
         "debug/contact_thumb":   contact_thumb,
         "debug/contact_fingers": contact_fingers,
         "debug/contact_total":   contact_total,
