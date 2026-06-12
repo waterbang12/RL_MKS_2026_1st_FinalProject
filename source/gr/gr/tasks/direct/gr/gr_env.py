@@ -673,11 +673,8 @@ def compute_rewards(
     thumb_err   = per_tip_err[:, 0]
     other_tip_reward = torch.exp(-2.0 * per_tip_err[:, 1:]).min(dim=-1).values  # logging only
 
-    # gated: before grip → track world-space thumb ref; after grip → silent
-    thumb_reward_component = (1.0 - bilateral_gate) * (
-        0.3 * torch.exp(-2.0  * thumb_err) +
-        0.7 * torch.exp(-20.0 * thumb_err)
-    )
+    # soft pull only — sharp exp(-20) drove thumb through capsule causing topple
+    thumb_reward_component = (1.0 - bilateral_gate) * 0.3 * torch.exp(-2.0 * thumb_err)
 
     # wrist: before grip → hold at pregrasp frame 30; after grip → follow full lifted ref
     wrist_pre_err  = torch.norm(hand_pos - wrist_pos_pregrasp_ref, p=2, dim=-1)
