@@ -619,24 +619,16 @@ def compute_rewards(
     rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
     obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
 
-    # direction relative to REFERENCE obj for ref, ACTUAL obj for robot
-    # invariant to whether capsule lifted: robot fingertip direction from actual capsule
-    # matches reference fingertip direction from reference capsule
-    obj_to_ref_raw   = fingertip_pos_ref - obj_pos_ref.unsqueeze(1)  # (B, 5, 3)
-    obj_to_robot_raw = fingertip_pos     - obj_pos.unsqueeze(1)      # (B, 5, 3)
-    obj_to_ref_n   = obj_to_ref_raw   / (torch.norm(obj_to_ref_raw,   p=2, dim=-1, keepdim=True) + 1e-8)
-    obj_to_robot_n = obj_to_robot_raw / (torch.norm(obj_to_robot_raw, p=2, dim=-1, keepdim=True) + 1e-8)
+    obj_to_ref   = fingertip_pos_ref - obj_pos.unsqueeze(1)  # (B, 5, 3)
+    obj_to_robot = fingertip_pos     - obj_pos.unsqueeze(1)  # (B, 5, 3)
+    obj_to_ref_n   = obj_to_ref   / (torch.norm(obj_to_ref,   p=2, dim=-1, keepdim=True) + 1e-8)
+    obj_to_robot_n = obj_to_robot / (torch.norm(obj_to_robot, p=2, dim=-1, keepdim=True) + 1e-8)
     cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1)
     dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))
 
-    # shift fingertip targets by object's lag so targets stay near actual capsule even if it didn't lift
-    obj_offset = (obj_pos - obj_pos_ref).unsqueeze(1)            # (B, 1, 3)
-    fingertip_pos_ref_adj = fingertip_pos_ref + obj_offset        # (B, 5, 3)
-    per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref_adj, p=2, dim=-1)  # (B, 5)
+    per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
     thumb_err    = per_tip_err[:, 0]                                             # (B,)
 
-    # 3D position matching to reference (adjusted for actual capsule position via obj_offset)
-    # pressing 1-2mm deeper than reference costs only exp(-2*0.002)=0.996 — negligible
     other_tip_reward = torch.exp(-2.0 * per_tip_err[:, 1:]).min(dim=-1).values  # (B,)
     fingertip_reward = dir_reward * other_tip_reward
 
@@ -662,9 +654,10 @@ def compute_rewards(
 
     lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     contact_gate = torch.clamp(contact_total / 0.1, 0.0, 1.0)
-    lift_reward = 5.0 * torch.tanh(lift_height * 20.0)
-    # gate vel_z only — prevents smack exploit while keeping direct lift signal
-    vel_z_reward = 2.0 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
+    # bilateral gate: both sides must contact — blocks tipping exploit, consistent with pouring grip too
+    bilateral_gate = torch.tanh(contact_thumb / 0.3) * torch.tanh(contact_fingers / 0.8)
+    lift_reward = bilateral_gate * 5.0 * torch.tanh(lift_height * 20.0)
+    vel_z_reward = bilateral_gate * 2.0 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
