@@ -610,7 +610,7 @@ def compute_rewards(
     other_err    = per_tip_err[:, 1:]                                            # (B, 4)
 
     # other 4 fingers: 2-term product (stable, was working)
-    other_tip_reward = torch.exp(-2.0 * other_err).mean(dim=-1)                   # (B,)
+    other_tip_reward = torch.exp(-20.0 * other_err).mean(dim=-1)                  # (B,)
     fingertip_reward = dir_reward * other_tip_reward
 
     # thumb: separate additive term — two-scale so near-contact pressure doesn't destabilize product
