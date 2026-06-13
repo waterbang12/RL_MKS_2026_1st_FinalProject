@@ -162,10 +162,9 @@ class GrEnv(DirectRLEnv):
 
         # Override headless video camera (ViewerCfg only affects interactive GUI, not --video)
         self.sim.set_camera_view(
-            eye=np.array([1.25, -1, 1.5]),
-            target=np.array([1, -1.25, 0.45]),
+            eye=np.array([1.0*0.7, 3.2*0.7, 0.7]),
+            target=np.array([1.0, 1.0, 0.4]),
         )
-
 
 
     def _setup_data(self):
@@ -201,17 +200,6 @@ class GrEnv(DirectRLEnv):
         self.hand_rot_reset[:] = self.inputs['R_init'].to(self.device)
         self.hand_pos_reset[:] = (self.inputs['t_init']).to(self.device) + to_center_pos[0]
         self.hand_pos_reset[:,2] = self.hand_pos_reset[:,2] + 0.01
-
-        # Pinch geometry diagnostic — check if thumb and index are on opposite sides of capsule
-        mid = min(100, seq_len - 1)
-        obj_p   = self.obj_pos_seq[mid].cpu()          # (3,)
-        thumb_p = self.fingertip_pos_seq[mid, 0].cpu() # thumb tip (MANO_fingertips[0]=4)
-        index_p = self.fingertip_pos_seq[mid, 1].cpu() # index tip (MANO_fingertips[1]=8)
-        v_th = thumb_p - obj_p;  v_th = v_th / (v_th.norm() + 1e-8)
-        v_ix = index_p - obj_p;  v_ix = v_ix / (v_ix.norm() + 1e-8)
-        dot = (v_th * v_ix).sum().item()
-        print(f"[PinchCheck] frame={mid}  thumb_offset={( thumb_p - obj_p).numpy()}  index_offset={(index_p - obj_p).numpy()}")
-        print(f"[PinchCheck] cos_angle={dot:.3f}  ({'OPPOSITE SIDES = pinch OK' if dot < -0.2 else 'SAME SIDE = no pinch!' if dot > 0.3 else 'roughly orthogonal'})")
 
 
     def _setup_scene(self):
@@ -318,7 +306,6 @@ class GrEnv(DirectRLEnv):
         )
 
 
-
     def _get_observations(self) -> dict:
         # Provided code. Do not modify.
         obs = self.compute_full_observations()
@@ -337,14 +324,12 @@ class GrEnv(DirectRLEnv):
             self.obj_rot_ref,
             self.fingertip_pos,
             self.fingertip_pos_ref,
-            self.obj_fingertip_pos_seq_offset[26],   # pregrasp = contact frame
             self.hand_pos,
-            self.mano_kpts_pos_ref[:, 0],            # current-frame wrist ref
-            self.mano_kpts_pos_seq[26, 0],           # fixed frame-26 wrist ref
-            self.fingertip_contact_forces,
-            self.obj_linvel,
+            self.mano_kpts_pos_ref[:, 0],
             self.actions,
             self.hand_dof_vel,
+            self.fingertip_contact_forces,
+            self.obj_linvel,
             self.cfg.action_penalty_scale,
             self.cfg.dof_penalty_scale,
             self.obj_rest_z,
@@ -355,16 +340,6 @@ class GrEnv(DirectRLEnv):
                 self.logs_dict[key] = value.detach()
             else:
                 self.logs_dict[key] += value.detach()
-
-        if self.play:
-            step = self.episode_length_buf[0].item()
-            if step % 10 == 0:  # print every 10 steps
-                ct = logs_dict["debug/contact_total"][0].item()
-                cth = logs_dict["debug/contact_thumb"][0].item()
-                cfi = logs_dict["debug/contact_fingers"][0].item()
-                vz = logs_dict["debug/obj_linvel_z"][0].item()
-                lh = (self.obj_pos[0, 2] - self.obj_rest_z).clamp(min=0).item()
-                print(f"  step={step:3d}  contact: thumb={cth:.2f} fingers={cfi:.2f} total={ct:.2f} | obj_vz={vz:.4f} | lift_h={lh:.4f}")
 
         if "log" not in self.extras:
             self.extras["log"] = dict()
@@ -606,135 +581,78 @@ def compute_rewards(
     obj_rot_ref: torch.Tensor,
     fingertip_pos: torch.Tensor,
     fingertip_pos_ref: torch.Tensor,
-    pregrasp_rel: torch.Tensor,           # (5,3) frame-26 obj-relative fingertip targets
     hand_pos: torch.Tensor,
-    wrist_pos_ref: torch.Tensor,          # current-frame wrist ref
-    wrist_pos_pregrasp_ref: torch.Tensor, # fixed frame-26 wrist ref
-    fingertip_contact_forces: torch.Tensor,
-    obj_linvel: torch.Tensor,
+    wrist_pos_ref: torch.Tensor,
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
+    fingertip_contact_forces: torch.Tensor,
+    obj_linvel: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
 ):
-    # --- geometry ---
-    obj_to_ref   = fingertip_pos_ref - obj_pos_ref.unsqueeze(1)  # (B,5,3)
-    obj_to_robot = fingertip_pos     - obj_pos.unsqueeze(1)      # (B,5,3)
+    obj_pos_err = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
+    obj_pos_reward = torch.exp(-2.0 * obj_pos_err)
 
+    rot_dot = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
+    obj_rot_reward = torch.exp(-2.0 * (1.0 - rot_dot))
+
+    # method 1: object-relative direction — gradient goes around object, not through it
+    obj_to_ref   = fingertip_pos_ref - obj_pos.unsqueeze(1)  # (B, 5, 3)
+    obj_to_robot = fingertip_pos     - obj_pos.unsqueeze(1)  # (B, 5, 3)
     obj_to_ref_n   = obj_to_ref   / (torch.norm(obj_to_ref,   p=2, dim=-1, keepdim=True) + 1e-8)
     obj_to_robot_n = obj_to_robot / (torch.norm(obj_to_robot, p=2, dim=-1, keepdim=True) + 1e-8)
-    cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1).clamp(-1.0, 1.0)  # (B,5)
+    cos_sim = (obj_to_ref_n * obj_to_robot_n).sum(dim=-1)   # (B, 5), +1=correct side
+    dir_reward = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))  # all 5 must be on correct side
 
-    # direction
-    dir_reward      = torch.exp(-2.0 * (1.0 - cos_sim).sum(dim=-1))
-    per_finger_dir  = torch.clamp(((cos_sim + 1.0) * 0.5 - 0.3) / 0.4, 0.0, 1.0)
-    thumb_dir_gate  = per_finger_dir[:, 0]
-    finger_dir_gate = per_finger_dir[:, 1:].mean(dim=-1)
-    dir_gate        = thumb_dir_gate * finger_dir_gate
+    per_tip_err  = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
+    thumb_err    = per_tip_err[:, 0]                                             # (B,)
+    other_err    = per_tip_err[:, 1:]                                            # (B, 4)
 
-    # radial (5mm press-in margin removes dead zone)
-    fingertip_dist     = torch.norm(obj_to_robot, p=2, dim=-1)
-    ref_dist           = torch.norm(obj_to_ref,   p=2, dim=-1)
-    radial_over        = torch.clamp(fingertip_dist - (ref_dist - 0.005), min=0.0)
-    radial_reward_mean = torch.exp(-15.0 * radial_over).mean(dim=-1)
-    radial_reward_min  = torch.exp(-20.0 * radial_over).min(dim=-1).values
-    radial_reward      = 0.7 * radial_reward_mean + 0.3 * radial_reward_min
-    near_gate          = torch.clamp((radial_reward - 0.45) / 0.40, 0.0, 1.0)
+    # other 4 fingers: 2-term product (stable, was working)
+    other_tip_reward = torch.exp(-2.0 * other_err).mean(dim=-1)                   # (B,)
+    fingertip_reward = dir_reward * other_tip_reward
 
-    # contact
-    contact_mag         = torch.norm(fingertip_contact_forces, p=2, dim=-1)
-    contact_thumb       = contact_mag[:, 0]
-    contact_fingers     = contact_mag[:, 1:].sum(dim=-1)
-    contact_total       = contact_mag.sum(dim=-1)
-    thumb_contact_gate  = torch.tanh(contact_thumb   / 0.3)
-    finger_contact_gate = torch.tanh(contact_fingers / 0.8)
-    bilateral_gate      = thumb_contact_gate * finger_contact_gate
-    grasp_gate          = dir_gate * near_gate * bilateral_gate
-
-    # approach: object-relative pregrasp target, active until bilateral contact
-    approach_err    = torch.norm(obj_to_robot - pregrasp_rel.unsqueeze(0), p=2, dim=-1).mean(dim=-1)
-    approach_reward = (1.0 - bilateral_gate) * 3.0 * torch.exp(-10.0 * approach_err)
-
-    # fingertip: direction + radial, always active
-    fingertip_reward = 0.5 * dir_reward + 1.5 * dir_reward * radial_reward
-
-    # contact: dir_gate guards against tip grasping
-    contact_reward = dir_gate * (
-        2.0 * thumb_contact_gate + 2.0 * finger_contact_gate + 4.0 * bilateral_gate
+    # thumb: separate additive term — two-scale so near-contact pressure doesn't destabilize product
+    thumb_reward_component = (
+        0.3 * torch.exp(-2.0  * thumb_err) +
+        0.7 * torch.exp(-20.0 * thumb_err)
     )
 
-    # wrist: hold pregrasp until contact, follow full ref after
-    wrist_pre_err  = torch.norm(hand_pos - wrist_pos_pregrasp_ref, p=2, dim=-1)
-    wrist_full_err = torch.norm(hand_pos - wrist_pos_ref,          p=2, dim=-1)
-    wrist_reward   = (
-        (1.0 - bilateral_gate) * torch.exp(-2.0 * wrist_pre_err)
-        + bilateral_gate       * torch.exp(-2.0 * wrist_full_err)
-    )
+    wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
+    wrist_reward = torch.exp(-2.0 * wrist_err)
 
-    # object tracking: gated on grasp so trajectory only rewarded when gripping
-    obj_pos_err    = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
-    rot_dot        = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
-    obj_pos_reward = grasp_gate * torch.exp(-2.0 * obj_pos_err)
-    obj_rot_reward = grasp_gate * torch.exp(-2.0 * (1.0 - rot_dot))
+    lift_height = (obj_pos[:, 2] - table_z).clamp(min=0.0)
+    lift_reward = 2.0 * torch.tanh(lift_height * 20.0)
 
-    # lift: gated on grasp quality
-    lift_height    = (obj_pos[:, 2] - table_z).clamp(min=0.0)
-    contact_gate   = torch.clamp(contact_total / 0.1, 0.0, 1.0)
-    lift_reward    = grasp_gate * 5.0 * torch.tanh(lift_height * 20.0)
-    vel_z_reward   = grasp_gate * 0.8 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
+    contact_mag = torch.norm(fingertip_contact_forces, p=2, dim=-1)  # (B, 5)
+    contact_thumb   = contact_mag[:, 0]
+    contact_fingers = contact_mag[:, 1:].sum(dim=-1)
+    contact_total   = contact_mag.sum(dim=-1)
 
-    # negative: always penalise no contact (breaks hover-near-capsule plateau)
-    no_contact_penalty = -2.0 * (1.0 - bilateral_gate)
+    action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
+    dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
 
-    # penalties
-    action_penalty  = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
-    dof_vel_penalty = dof_penalty_scale    * torch.sum(hand_dof_vel ** 2, dim=-1)
-
-    reward = (
-        approach_reward
-        + fingertip_reward
-        + contact_reward
-        + wrist_reward
-        + obj_pos_reward
-        + obj_rot_reward
-        + lift_reward
-        + vel_z_reward
-        + no_contact_penalty
-        + action_penalty
-        + dof_vel_penalty
-    )
-    # no clamp — rl-games normalises rewards internally, negatives are valid signal
+    reward = obj_pos_reward + obj_rot_reward + fingertip_reward + thumb_reward_component + wrist_reward + lift_reward + action_penalty + dof_vel_penalty
+    reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
-        "reward/total":              reward,
-        "reward/approach":           approach_reward,
-        "reward/fingertip":          fingertip_reward,
-        "reward/contact":            contact_reward,
-        "reward/wrist":              wrist_reward,
-        "reward/obj_pos":            obj_pos_reward,
-        "reward/obj_rot":            obj_rot_reward,
-        "reward/lift":               lift_reward,
-        "reward/vel_z":              vel_z_reward,
-        "reward/no_contact_penalty": no_contact_penalty,
-        "reward/action_penalty":     action_penalty,
-        "reward/dof_penalty":        dof_vel_penalty,
-        "gate/dir":               dir_gate,
-        "gate/near":              near_gate,
-        "gate/bilateral":         bilateral_gate,
-        "gate/grasp":             grasp_gate,
-        "gate/thumb_dir":         thumb_dir_gate,
-        "gate/finger_dir":        finger_dir_gate,
-        "gate/thumb_contact":     thumb_contact_gate,
-        "gate/finger_contact":    finger_contact_gate,
-        "debug/approach_err":     approach_err,
-        "debug/radial_over_mean": radial_over.mean(dim=-1),
-        "debug/contact_thumb":    contact_thumb,
-        "debug/contact_fingers":  contact_fingers,
-        "debug/contact_total":    contact_total,
-        "debug/lift_height":      lift_height,
-        "debug/obj_linvel_z":     obj_linvel[:, 2],
-        "debug/phase":            prog_f,
+        "reward/total": reward,
+        "reward/obj_pos": obj_pos_reward,
+        "reward/obj_rot": obj_rot_reward,
+        "reward/fingertip": fingertip_reward,
+        "reward/dir": dir_reward,
+        "reward/other_tip_min": other_tip_reward,
+        "reward/thumb_tip": thumb_reward_component,
+        "debug/thumb_err": thumb_err,
+        "reward/wrist": wrist_reward,
+        "reward/lift": lift_reward,
+        "reward/action_penalty": action_penalty,
+        "reward/dof_vel_penalty": dof_vel_penalty,
+        "debug/contact_thumb":   contact_thumb,
+        "debug/contact_fingers": contact_fingers,
+        "debug/contact_total":   contact_total,
+        "debug/obj_linvel_z":    obj_linvel[:, 2],
     }
 
     return reward, logs_dict
