@@ -698,6 +698,10 @@ def compute_rewards(
     action_penalty  = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale    * torch.sum(hand_dof_vel ** 2, dim=-1)
 
+    # negative rewards: break the "hovering near capsule" plateau
+    no_contact_penalty = grasp_mask * (-2.0) * (1.0 - bilateral_gate)
+    traj_penalty       = lift_mask  * (-1.0) * obj_pos_err
+
     reward = (
         approach_reward
         + fingertip_reward
@@ -707,23 +711,27 @@ def compute_rewards(
         + obj_rot_reward
         + lift_reward
         + vel_z_reward
+        + no_contact_penalty
+        + traj_penalty
         + action_penalty
         + dof_vel_penalty
     )
-    reward = torch.clamp_min(reward, 0.0)
+    # no clamp — rl-games normalises rewards internally, negatives are valid signal
 
     logs_dict = {
-        "reward/total":           reward,
-        "reward/approach":        approach_reward,
-        "reward/fingertip":       fingertip_reward,
-        "reward/contact":         contact_reward,
-        "reward/wrist":           wrist_reward,
-        "reward/obj_pos":         obj_pos_reward,
-        "reward/obj_rot":         obj_rot_reward,
-        "reward/lift":            lift_reward,
-        "reward/vel_z":           vel_z_reward,
-        "reward/action_penalty":  action_penalty,
-        "reward/dof_penalty":     dof_vel_penalty,
+        "reward/total":              reward,
+        "reward/approach":           approach_reward,
+        "reward/fingertip":          fingertip_reward,
+        "reward/contact":            contact_reward,
+        "reward/wrist":              wrist_reward,
+        "reward/obj_pos":            obj_pos_reward,
+        "reward/obj_rot":            obj_rot_reward,
+        "reward/lift":               lift_reward,
+        "reward/vel_z":              vel_z_reward,
+        "reward/no_contact_penalty": no_contact_penalty,
+        "reward/traj_penalty":       traj_penalty,
+        "reward/action_penalty":     action_penalty,
+        "reward/dof_penalty":        dof_vel_penalty,
         "gate/dir":               dir_gate,
         "gate/near":              near_gate,
         "gate/bilateral":         bilateral_gate,
