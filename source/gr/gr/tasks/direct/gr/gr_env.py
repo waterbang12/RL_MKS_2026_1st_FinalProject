@@ -607,7 +607,7 @@ def compute_rewards(
 
     per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
 
-    # all 5 fingers — each separate additive term, dir_reward gates each one
+    # direction-gated precision — full reward only when on correct side of capsule
     thumb_reward  = dir_reward * torch.exp(-20.0 * per_tip_err[:, 0])
     index_reward  = dir_reward * torch.exp(-20.0 * per_tip_err[:, 1])
     middle_reward = dir_reward * torch.exp(-20.0 * per_tip_err[:, 2])
