@@ -343,7 +343,6 @@ class GrEnv(DirectRLEnv):
             self.mano_kpts_pos_seq[26, 0],           # fixed frame-26 wrist ref
             self.fingertip_contact_forces,
             self.obj_linvel,
-            self.episode_length_buf,                 # per-env step counter
             self.actions,
             self.hand_dof_vel,
             self.cfg.action_penalty_scale,
@@ -613,22 +612,13 @@ def compute_rewards(
     wrist_pos_pregrasp_ref: torch.Tensor, # fixed frame-26 wrist ref
     fingertip_contact_forces: torch.Tensor,
     obj_linvel: torch.Tensor,
-    progress: torch.Tensor,               # (B,) episode step from episode_length_buf
     actions: torch.Tensor,
     hand_dof_vel: torch.Tensor,
     action_penalty_scale: float,
     dof_penalty_scale: float,
     table_z: float,
 ):
-    # --- phase masks (per-env, hard boundaries from reference data) ---
-    prog_f        = progress.float()
-    approach_mask = (prog_f < 26.0).float()                        # 0-25:  move to pregrasp
-    grasp_mask    = ((prog_f >= 26.0) & (prog_f < 80.0)).float()  # 26-79: establish grip
-    lift_mask     = (prog_f >= 80.0).float()                       # 80-249: carry and track
-
-    post_approach = grasp_mask + lift_mask    # grasp + lift combined
-
-    # --- geometry (always computed; reused across phases) ---
+    # --- geometry ---
     obj_to_ref   = fingertip_pos_ref - obj_pos_ref.unsqueeze(1)  # (B,5,3)
     obj_to_robot = fingertip_pos     - obj_pos.unsqueeze(1)      # (B,5,3)
 
@@ -662,45 +652,44 @@ def compute_rewards(
     bilateral_gate      = thumb_contact_gate * finger_contact_gate
     grasp_gate          = dir_gate * near_gate * bilateral_gate
 
-    # ── APPROACH (steps 0-25) ──────────────────────────────────────────────
-    # drive all fingertips to pregrasp pose in object-relative space
+    # approach: object-relative pregrasp target, active until bilateral contact
     approach_err    = torch.norm(obj_to_robot - pregrasp_rel.unsqueeze(0), p=2, dim=-1).mean(dim=-1)
-    approach_reward = approach_mask * (3.0 * torch.exp(-10.0 * approach_err) + dir_reward)
+    approach_reward = (1.0 - bilateral_gate) * 3.0 * torch.exp(-10.0 * approach_err)
 
-    wrist_pre_err  = torch.norm(hand_pos - wrist_pos_pregrasp_ref, p=2, dim=-1)
-    wrist_reward   = approach_mask * torch.exp(-2.0 * wrist_pre_err)
+    # fingertip: direction + radial, always active
+    fingertip_reward = 0.5 * dir_reward + 1.5 * dir_reward * radial_reward
 
-    # ── GRASP (steps 26-39) ───────────────────────────────────────────────
-    # close correctly-oriented fingers onto capsule surface
-    fingertip_reward = post_approach * (0.5 * dir_reward + 1.5 * dir_reward * radial_reward)
-    contact_reward   = post_approach * dir_gate * (
+    # contact: dir_gate guards against tip grasping
+    contact_reward = dir_gate * (
         2.0 * thumb_contact_gate + 2.0 * finger_contact_gate + 4.0 * bilateral_gate
     )
-    # wrist stays at pregrasp during grasp phase too
-    wrist_reward     = wrist_reward + grasp_mask * torch.exp(-2.0 * wrist_pre_err)
 
-    # ── LIFT / CARRY (steps 40-249) ───────────────────────────────────────
-    # track full reference trajectory; retain grip (grasp_gate guards obj rewards)
+    # wrist: hold pregrasp until contact, follow full ref after
+    wrist_pre_err  = torch.norm(hand_pos - wrist_pos_pregrasp_ref, p=2, dim=-1)
+    wrist_full_err = torch.norm(hand_pos - wrist_pos_ref,          p=2, dim=-1)
+    wrist_reward   = (
+        (1.0 - bilateral_gate) * torch.exp(-2.0 * wrist_pre_err)
+        + bilateral_gate       * torch.exp(-2.0 * wrist_full_err)
+    )
+
+    # object tracking: gated on grasp so trajectory only rewarded when gripping
     obj_pos_err    = torch.norm(obj_pos - obj_pos_ref, p=2, dim=-1)
     rot_dot        = torch.abs((obj_rot * obj_rot_ref).sum(dim=-1)).clamp(-1.0, 1.0)
-    obj_pos_reward = lift_mask * grasp_gate * torch.exp(-2.0 * obj_pos_err)
-    obj_rot_reward = lift_mask * grasp_gate * torch.exp(-2.0 * (1.0 - rot_dot))
+    obj_pos_reward = grasp_gate * torch.exp(-2.0 * obj_pos_err)
+    obj_rot_reward = grasp_gate * torch.exp(-2.0 * (1.0 - rot_dot))
 
+    # lift: gated on grasp quality
     lift_height    = (obj_pos[:, 2] - table_z).clamp(min=0.0)
     contact_gate   = torch.clamp(contact_total / 0.1, 0.0, 1.0)
-    lift_reward    = lift_mask * grasp_gate * 5.0 * torch.tanh(lift_height * 20.0)
-    vel_z_reward   = lift_mask * grasp_gate * 0.8 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
+    lift_reward    = grasp_gate * 5.0 * torch.tanh(lift_height * 20.0)
+    vel_z_reward   = grasp_gate * 0.8 * contact_gate * torch.tanh(obj_linvel[:, 2] * 10.0)
 
-    wrist_full_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
-    wrist_reward   = wrist_reward + lift_mask * torch.exp(-2.0 * wrist_full_err)
+    # negative: always penalise no contact (breaks hover-near-capsule plateau)
+    no_contact_penalty = -2.0 * (1.0 - bilateral_gate)
 
-    # ── PENALTIES (always) ────────────────────────────────────────────────
+    # penalties
     action_penalty  = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale    * torch.sum(hand_dof_vel ** 2, dim=-1)
-
-    # negative rewards: break the "hovering near capsule" plateau
-    no_contact_penalty = grasp_mask * (-2.0) * (1.0 - bilateral_gate)
-    traj_penalty       = lift_mask  * (-1.0) * obj_pos_err
 
     reward = (
         approach_reward
@@ -712,7 +701,6 @@ def compute_rewards(
         + lift_reward
         + vel_z_reward
         + no_contact_penalty
-        + traj_penalty
         + action_penalty
         + dof_vel_penalty
     )
@@ -729,7 +717,6 @@ def compute_rewards(
         "reward/lift":               lift_reward,
         "reward/vel_z":              vel_z_reward,
         "reward/no_contact_penalty": no_contact_penalty,
-        "reward/traj_penalty":       traj_penalty,
         "reward/action_penalty":     action_penalty,
         "reward/dof_penalty":        dof_vel_penalty,
         "gate/dir":               dir_gate,
