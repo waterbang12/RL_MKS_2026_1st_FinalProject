@@ -625,7 +625,7 @@ def compute_rewards(
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
 
-    no_contact_penalty = -5.0 * torch.exp(-contact_total / 0.3)
+    no_contact_penalty = -1.0 * torch.exp(-contact_mag / 0.3).sum(dim=-1)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
