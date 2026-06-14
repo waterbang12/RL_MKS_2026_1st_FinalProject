@@ -607,12 +607,12 @@ def compute_rewards(
 
     per_tip_err = torch.norm(fingertip_pos - fingertip_pos_ref, p=2, dim=-1)  # (B, 5)
 
-    # per-finger: sharp kernel, no gate — each finger approaches freely
-    thumb_reward  = torch.exp(-50.0 * per_tip_err[:, 0])
-    index_reward  = torch.exp(-50.0 * per_tip_err[:, 1])
-    middle_reward = torch.exp(-50.0 * per_tip_err[:, 2])
-    ring_reward   = torch.exp(-50.0 * per_tip_err[:, 3])
-    little_reward = torch.exp(-50.0 * per_tip_err[:, 4])
+    # per-finger: two-scale kernel — -2 for approach, -20 for contact pressure
+    thumb_reward  = 0.3 * torch.exp(-2.0 * per_tip_err[:, 0]) + 0.7 * torch.exp(-20.0 * per_tip_err[:, 0])
+    index_reward  = 0.3 * torch.exp(-2.0 * per_tip_err[:, 1]) + 0.7 * torch.exp(-20.0 * per_tip_err[:, 1])
+    middle_reward = 0.3 * torch.exp(-2.0 * per_tip_err[:, 2]) + 0.7 * torch.exp(-20.0 * per_tip_err[:, 2])
+    ring_reward   = 0.3 * torch.exp(-2.0 * per_tip_err[:, 3]) + 0.7 * torch.exp(-20.0 * per_tip_err[:, 3])
+    little_reward = 0.3 * torch.exp(-2.0 * per_tip_err[:, 4]) + 0.7 * torch.exp(-20.0 * per_tip_err[:, 4])
 
     wrist_err = torch.norm(hand_pos - wrist_pos_ref, p=2, dim=-1)
     wrist_reward = torch.exp(-2.0 * wrist_err)
@@ -625,7 +625,7 @@ def compute_rewards(
     contact_fingers = contact_mag[:, 1:].sum(dim=-1)
     contact_total   = contact_mag.sum(dim=-1)
 
-    no_contact_penalty = -1.0 * torch.exp(-contact_total / 0.3)
+    no_contact_penalty = -5.0 * torch.exp(-contact_total / 0.3)
 
     action_penalty = action_penalty_scale * torch.sum(actions ** 2, dim=-1)
     dof_vel_penalty = dof_penalty_scale * torch.sum(hand_dof_vel ** 2, dim=-1)
