@@ -637,8 +637,6 @@ def compute_rewards(
         + no_contact_penalty
         + action_penalty + dof_vel_penalty
     )
-    reward = torch.clamp_min(reward, 0.0)
-
     logs_dict = {
         "reward/total":   reward,
         "reward/obj_pos": obj_pos_reward,
